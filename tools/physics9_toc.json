@@ -1,0 +1,165 @@
+[
+  {
+    "id": "ch-1",
+    "title": "Unit 1 — Physical Quantities and Measurement",
+    "level": 1,
+    "parent_id": null,
+    "start_page_pdf": 1,
+    "end_page_pdf": 26,
+    "keywords": [
+      "measurement",
+      "physical quantities",
+      "SI units",
+      "prefixes",
+      "scientific notation",
+      "vernier calipers",
+      "screw gauge",
+      "significant figures"
+    ]
+  },
+  {
+    "id": "ch-2",
+    "title": "Unit 2 — Kinematics",
+    "level": 1,
+    "parent_id": null,
+    "start_page_pdf": 27,
+    "end_page_pdf": 54,
+    "keywords": [
+      "rest and motion",
+      "types of motion",
+      "scalars and vectors",
+      "distance and displacement",
+      "speed and velocity",
+      "acceleration",
+      "graphs of motion",
+      "equations of motion",
+      "gravity"
+    ]
+  },
+  {
+    "id": "ch-3",
+    "title": "Unit 3 — Dynamics",
+    "level": 1,
+    "parent_id": null,
+    "start_page_pdf": 55,
+    "end_page_pdf": 83,
+    "keywords": [
+      "force",
+      "inertia",
+      "momentum",
+      "newton laws",
+      "friction",
+      "centripetal force",
+      "conservation of momentum"
+    ]
+  },
+  {
+    "id": "ch-4",
+    "title": "Unit 4 — Turning Effect of Forces",
+    "level": 1,
+    "parent_id": null,
+    "start_page_pdf": 84,
+    "end_page_pdf": 105,
+    "keywords": [
+      "parallel forces",
+      "resultant force",
+      "resolution of forces",
+      "torque",
+      "moment of force",
+      "principle of moments",
+      "centre of mass",
+      "centre of gravity",
+      "couple",
+      "equilibrium",
+      "stability"
+    ]
+  },
+  {
+    "id": "ch-5",
+    "title": "Unit 5 — Gravitation",
+    "level": 1,
+    "parent_id": null,
+    "start_page_pdf": 106,
+    "end_page_pdf": 116,
+    "keywords": [
+      "law of gravitation",
+      "gravitational field",
+      "mass of earth",
+      "variation of g",
+      "artificial satellites"
+    ]
+  },
+  {
+    "id": "ch-6",
+    "title": "Unit 6 — Work and Energy",
+    "level": 1,
+    "parent_id": null,
+    "start_page_pdf": 117,
+    "end_page_pdf": 143,
+    "keywords": [
+      "work",
+      "energy",
+      "kinetic energy",
+      "potential energy",
+      "sources of energy",
+      "efficiency",
+      "power"
+    ]
+  },
+  {
+    "id": "ch-7",
+    "title": "Unit 7 — Properties of Matter",
+    "level": 1,
+    "parent_id": null,
+    "start_page_pdf": 144,
+    "end_page_pdf": 167,
+    "keywords": [
+      "kinetic molecular model",
+      "density",
+      "pressure",
+      "atmospheric pressure",
+      "pressure in liquids",
+      "pascal law",
+      "archimedes principle",
+      "floatation",
+      "elasticity",
+      "stress",
+      "strain",
+      "young modulus"
+    ]
+  },
+  {
+    "id": "ch-8",
+    "title": "Unit 8 — Thermal Properties of Matter",
+    "level": 1,
+    "parent_id": null,
+    "start_page_pdf": 168,
+    "end_page_pdf": 193,
+    "keywords": [
+      "temperature",
+      "heat",
+      "thermometer",
+      "specific heat capacity",
+      "latent heat of fusion",
+      "latent heat of vaporization",
+      "evaporation",
+      "thermal expansion"
+    ]
+  },
+  {
+    "id": "ch-9",
+    "title": "Unit 9 — Transfer of Heat",
+    "level": 1,
+    "parent_id": null,
+    "start_page_pdf": 194,
+    "end_page_pdf": 208,
+    "keywords": [
+      "heat transfer",
+      "conduction",
+      "convection",
+      "radiation",
+      "thermal conductivity",
+      "applications of heat transfer"
+    ]
+  }
+]

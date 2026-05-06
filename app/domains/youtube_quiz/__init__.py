@@ -1,0 +1,2 @@
+"""YouTube quiz domain package."""
+

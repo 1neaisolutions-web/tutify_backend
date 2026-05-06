@@ -1,0 +1,24 @@
+{
+  "sections": [
+    {
+      "key": "title",
+      "label": "Assessment title",
+      "type": "markdown"
+    },
+    {
+      "key": "questions",
+      "label": "Questions",
+      "type": "markdown"
+    },
+    {
+      "key": "answer_key",
+      "label": "Answer Key",
+      "type": "markdown"
+    },
+    {
+      "key": "review_note",
+      "label": "Review note",
+      "type": "markdown"
+    }
+  ]
+}

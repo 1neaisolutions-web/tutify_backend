@@ -1,0 +1,29 @@
+{
+  "timestamp": "2026-04-30T20:44:48.054397",
+  "base_url": "http://127.0.0.1:8000",
+  "pdf_path": "C:\\Users\\Dell\\Downloads\\Physics 9.pdf",
+  "dry_run": false,
+  "document_id": "38df7c9c-6a46-4abe-89e2-4af7483fc401",
+  "statuses_seen": [
+    "TEXT_EXTRACTING",
+    "OCR_RUNNING",
+    "NORMALIZING",
+    "CHUNKING",
+    "EMBEDDING",
+    "INDEXING",
+    "QA_VALIDATION"
+  ],
+  "error_code": "TIMEOUT",
+  "error_message": "Timeout: PUBLISHED not reached within 1800 seconds.",
+  "chunk_count": 0,
+  "sample_chunk": null,
+  "checks": {
+    "upload": "PASS",
+    "ocr": "PASS",
+    "chunking": "PASS",
+    "embedding": "PASS",
+    "indexing": "PASS",
+    "vector_db": "FAIL",
+    "overall": "FAIL"
+  }
+}

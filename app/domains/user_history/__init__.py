@@ -1,0 +1,2 @@
+"""User history aggregation domain."""
+

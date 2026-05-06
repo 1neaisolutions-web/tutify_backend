@@ -1,0 +1,2 @@
+"""Recommendation Analytics domain."""
+

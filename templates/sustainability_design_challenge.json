@@ -1,0 +1,9 @@
+{
+  "sections": [
+    { "key": "challenge_brief", "label": "Challenge Brief", "type": "markdown" },
+    { "key": "design_thinking_stages", "label": "Design Thinking Stages", "type": "numbered_list" },
+    { "key": "engineering_constraints", "label": "Engineering Constraints", "type": "bullet_list" },
+    { "key": "deliverables", "label": "Deliverables", "type": "bullet_list" },
+    { "key": "evaluation_rubric", "label": "Evaluation Rubric", "type": "table" }
+  ]
+}

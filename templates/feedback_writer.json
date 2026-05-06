@@ -1,0 +1,29 @@
+{
+  "sections": [
+    {
+      "key": "areas_of_strength",
+      "label": "Areas of Strength",
+      "type": "markdown"
+    },
+    {
+      "key": "areas_for_growth",
+      "label": "Areas for Growth",
+      "type": "markdown"
+    },
+    {
+      "key": "writing_mechanics_feedback",
+      "label": "General Feedback on Writing Mechanics",
+      "type": "markdown"
+    },
+    {
+      "key": "next_steps",
+      "label": "Suggested Revision Next Steps",
+      "type": "markdown"
+    },
+    {
+      "key": "encouraging_summary",
+      "label": "Encouraging Summary",
+      "type": "markdown"
+    }
+  ]
+}

@@ -1,0 +1,70 @@
+# ============================================
+# 1ne.ai Backend - Production Dependencies
+# ============================================
+# Install with: pip install -r requirements.txt
+# For development dependencies, use: pip install -r requirements-dev.txt
+
+# Web Framework
+fastapi>=0.104.1,<0.105.0
+uvicorn[standard]>=0.24.0,<0.25.0
+
+# Database
+sqlalchemy>=2.0.23,<3.0.0
+alembic>=1.12.1,<2.0.0
+psycopg2-binary>=2.9.9,<3.0.0
+
+# Data Validation & Settings
+pydantic>=2.5.0,<3.0.0
+pydantic-settings>=2.1.0,<3.0.0
+
+# Environment Management
+python-dotenv>=1.0.0,<2.0.0
+
+# HTTP Client
+requests>=2.31.0,<3.0.0
+youtube-transcript-api>=0.6.2,<1.0.0
+
+# File Upload Support
+python-multipart>=0.0.6,<1.0.0
+
+# LLM Providers
+openai>=1.3.0,<2.0.0
+anthropic>=0.18.0,<1.0.0
+google-generativeai>=0.3.0,<1.0.0
+
+# Caching (Optional - Redis support)
+redis>=5.0.0,<6.0.0
+
+# Authentication & Security
+passlib[bcrypt]>=1.7.4
+python-jose[cryptography]>=3.3.0
+slowapi>=0.1.9
+aiosmtplib>=3.0.0
+email-validator>=2.1.0
+
+# Content Ingestion - OCR
+pytesseract>=0.3.10
+easyocr>=1.7.0
+ocrmypdf>=15.0.0
+pdf2image>=1.16.0
+Pillow>=10.0.0
+google-cloud-documentai>=2.28.0
+google-cloud-storage>=2.16.0
+
+# Content Ingestion - PDF/Document Processing
+pdfplumber>=0.10.0
+pypdf>=4.0.0
+python-docx>=1.1.0
+
+# Content Ingestion - Vector Database
+pgvector>=0.2.3
+
+# Content Ingestion - Token Counting
+tiktoken>=0.5.0
+
+# Content Ingestion - Vector Operations
+numpy>=1.24.0,<2.0.0
+
+# Content Ingestion - Free/local embeddings (CPU)
+sentence-transformers>=2.7.0
+torch>=2.2.0

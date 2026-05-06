@@ -1,0 +1,25 @@
+{
+  "sections": [
+    {
+      "key": "title",
+      "label": "Title",
+      "type": "markdown"
+    },
+    {
+      "key": "rewritten_text",
+      "label": "Proofread text",
+      "type": "markdown"
+    },
+    {
+      "key": "applied_criteria",
+      "label": "Applied criteria",
+      "type": "markdown"
+    },
+    {
+      "key": "optional_alternatives",
+      "label": "Optional alternatives",
+      "type": "markdown"
+    }
+  ]
+}
+

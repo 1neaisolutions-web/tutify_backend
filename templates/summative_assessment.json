@@ -1,0 +1,11 @@
+{
+  "sections": [
+    { "key": "test_overview", "label": "Test Overview", "type": "markdown" },
+    { "key": "learning_goals", "label": "Learning Goals", "type": "bullet_list" },
+    { "key": "instructions", "label": "Instructions", "type": "markdown" },
+    { "key": "rubric", "label": "Rubric / Marking Guide", "type": "markdown" },
+    { "key": "questions_section", "label": "Questions", "type": "markdown" },
+    { "key": "answer_key", "label": "Answer Key", "type": "markdown" },
+    { "key": "bloom_categorization", "label": "Bloom Categorization", "type": "markdown" }
+  ]
+}

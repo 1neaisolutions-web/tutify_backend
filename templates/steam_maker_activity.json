@@ -1,0 +1,10 @@
+{
+  "sections": [
+    { "key": "challenge_title", "label": "Challenge Title", "type": "text" },
+    { "key": "challenge_brief", "label": "Challenge Brief", "type": "markdown" },
+    { "key": "success_criteria", "label": "Success Criteria", "type": "bullet_list" },
+    { "key": "constraints", "label": "Constraints", "type": "bullet_list" },
+    { "key": "design_process", "label": "Design Process", "type": "numbered_list" },
+    { "key": "assessment", "label": "Assessment", "type": "markdown" }
+  ]
+}
