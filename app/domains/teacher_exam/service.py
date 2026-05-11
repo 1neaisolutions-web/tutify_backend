@@ -86,7 +86,8 @@ class TeacherExamService:
         page: int,
         page_size: int,
     ) -> Tuple[List[TeacherExam], int]:
-        return self.repo.list_exams(current_user.tenant_id, filters, page=page, page_size=page_size)
+        return self.repo.list_exams(current_user.tenant_id, filters, page=page, page_size=page_size,
+                                    owner_user_id=current_user.id)
 
     def get_exam(self, *, current_user: User, exam_id: UUID) -> TeacherExam:
         exam = self.repo.get_exam(current_user.tenant_id, exam_id, with_questions=True, with_sections=True)

@@ -76,7 +76,8 @@ class TeacherAssignmentService:
         page_size: int,
     ) -> Tuple[List[TeacherAssignment], int]:
         return self.repo.list_assignments(
-            current_user.tenant_id, filters, page=page, page_size=page_size
+            current_user.tenant_id, filters, page=page, page_size=page_size,
+            owner_user_id=current_user.id,
         )
 
     def get_assignment(self, *, current_user: User, assignment_id: UUID) -> TeacherAssignment:

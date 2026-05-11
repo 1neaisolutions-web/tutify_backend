@@ -35,8 +35,11 @@ class TeacherAssignmentRepository:
         filters: AssignmentListFilters,
         page: int = 1,
         page_size: int = 50,
+        owner_user_id: Optional[UUID] = None,
     ) -> Tuple[List[TeacherAssignment], int]:
         q = self.db.query(TeacherAssignment).filter(TeacherAssignment.tenant_id == tenant_id)
+        if owner_user_id is not None:
+            q = q.filter(TeacherAssignment.owner_user_id == owner_user_id)
 
         if filters.q:
             term = f"%{filters.q.lower()}%"

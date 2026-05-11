@@ -39,8 +39,11 @@ class TeacherExamRepository:
         filters: ExamListFilters,
         page: int = 1,
         page_size: int = 50,
+        owner_user_id: Optional[UUID] = None,
     ) -> Tuple[List[TeacherExam], int]:
         q = self.db.query(TeacherExam).filter(TeacherExam.tenant_id == tenant_id)
+        if owner_user_id is not None:
+            q = q.filter(TeacherExam.owner_user_id == owner_user_id)
 
         if filters.q:
             term = f"%{filters.q.lower()}%"

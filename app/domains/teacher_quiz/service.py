@@ -50,7 +50,8 @@ class TeacherQuizService:
         page: int,
         page_size: int,
     ) -> Tuple[List[TeacherQuiz], int]:
-        return self.repo.list_quizzes(current_user.tenant_id, filters, page=page, page_size=page_size)
+        return self.repo.list_quizzes(current_user.tenant_id, filters, page=page, page_size=page_size,
+                                      owner_user_id=current_user.id)
 
     def get_quiz(self, *, current_user: User, quiz_id: UUID) -> TeacherQuiz:
         quiz = self.repo.get_quiz(current_user.tenant_id, quiz_id, with_questions=True)

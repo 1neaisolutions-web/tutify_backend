@@ -139,7 +139,8 @@ class TeacherWorksheetService:
         page: int,
         page_size: int,
     ) -> Tuple[List[TeacherWorksheet], int]:
-        return self.repo.list_worksheets(current_user.tenant_id, filters, page=page, page_size=page_size)
+        return self.repo.list_worksheets(current_user.tenant_id, filters, page=page, page_size=page_size,
+                                          owner_user_id=current_user.id)
 
     def get_worksheet(self, *, current_user: User, worksheet_id: UUID) -> TeacherWorksheet:
         ws = self.repo.get_worksheet(current_user.tenant_id, worksheet_id, with_children=True)

@@ -37,8 +37,11 @@ class TeacherWorksheetRepository:
         filters: WorksheetListFilters,
         page: int = 1,
         page_size: int = 50,
+        owner_user_id: Optional[UUID] = None,
     ) -> Tuple[List[TeacherWorksheet], int]:
         q = self.db.query(TeacherWorksheet).filter(TeacherWorksheet.tenant_id == tenant_id)
+        if owner_user_id is not None:
+            q = q.filter(TeacherWorksheet.owner_user_id == owner_user_id)
 
         if filters.q:
             term = f"%{filters.q.lower()}%"
