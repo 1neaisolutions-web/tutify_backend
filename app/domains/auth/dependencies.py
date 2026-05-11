@@ -266,7 +266,7 @@ def require_any_role(*role_names: str):
         
         # Combine all filters with OR
         combined_filter = or_(*role_filters)
-        
+
         try:
             user_role = db.query(UserRole).join(Role).filter(
                 UserRole.user_id == current_user.id,
@@ -274,16 +274,49 @@ def require_any_role(*role_names: str):
                 combined_filter,
             ).first()
         except Exception as db_error:
-            # Log the actual database error for debugging
             logger.error(f"Database error during role check: {db_error}", exc_info=True)
-            # Re-raise as a more user-friendly error
             raise AuthorizationError(f"Database error during authorization check. Please try again.")
-        
+
         if not user_role:
+            # Fallback: check UserMembership (covers personal-workspace signups that
+            # created a membership but no UserRole, and auto-heals those accounts).
+            try:
+                from app.domains.auth.models import UserMembership
+                membership = (
+                    db.query(UserMembership)
+                    .join(Role, UserMembership.role_id == Role.id)
+                    .filter(
+                        UserMembership.user_id == current_user.id,
+                        UserMembership.is_active == True,
+                        combined_filter,
+                    )
+                    .first()
+                )
+                if membership:
+                    # Heal: create the missing UserRole so subsequent checks are instant.
+                    try:
+                        heal_role = UserRole(
+                            user_id=current_user.id,
+                            role_id=membership.role_id,
+                            tenant_id=current_user.tenant_id,
+                        )
+                        db.add(heal_role)
+                        db.commit()
+                        logger.info(f"Auto-healed missing UserRole for user {current_user.id}")
+                    except Exception:
+                        db.rollback()
+                    return current_user
+            except Exception as fallback_error:
+                logger.error(f"Membership fallback check failed: {fallback_error}", exc_info=True)
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+
             raise AuthorizationError(f"One of the following roles required: {', '.join(role_names)}")
-        
+
         return current_user
-    
+
     return role_checker
 
 

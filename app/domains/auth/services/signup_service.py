@@ -425,7 +425,7 @@ class TeacherSignupStrategy(SignupStrategy):
                 )
                 self.db.add(personal_workspace)
                 self.db.flush()
-                
+
                 # Create membership for personal workspace
                 membership = UserMembership(
                     user_id=user.id,
@@ -436,7 +436,15 @@ class TeacherSignupStrategy(SignupStrategy):
                 )
                 self.db.add(membership)
                 memberships.append(membership)
-        
+
+                # Also create UserRole for backward compatibility (required by require_any_role)
+                user_role = UserRole(
+                    user_id=user.id,
+                    role_id=teacher_role.id,
+                    tenant_id=tenant_id,
+                )
+                self.db.add(user_role)
+
         if not memberships:
             # If no membership was created, create a default one
             logger.warning(f"No teacher role found or membership creation failed for user {user.email}")
@@ -559,7 +567,7 @@ class StudentSignupStrategy(SignupStrategy):
                 )
                 self.db.add(personal_workspace)
                 self.db.flush()
-                
+
                 membership = UserMembership(
                     user_id=user.id,
                     scope_type=ScopeType.PERSONAL_WORKSPACE,
@@ -569,10 +577,18 @@ class StudentSignupStrategy(SignupStrategy):
                 )
                 self.db.add(membership)
                 memberships.append(membership)
-        
+
+                # Also create UserRole for backward compatibility (required by require_any_role)
+                user_role = UserRole(
+                    user_id=user.id,
+                    role_id=student_role.id,
+                    tenant_id=tenant_id,
+                )
+                self.db.add(user_role)
+
         self.db.commit()
         self.db.refresh(user)
-        
+
         # Audit log (non-blocking - don't fail signup if audit fails)
         try:
             account_type = "institution account" if institution_id else "personal workspace"
