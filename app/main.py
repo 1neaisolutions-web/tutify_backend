@@ -102,6 +102,89 @@ app.add_middleware(
 #
 # We run a conservative loop that processes at most one pending job at a time.
 @app.on_event("startup")
+async def _heal_missing_user_roles() -> None:
+    """
+    On every startup: ensure system roles exist and backfill any UserRole records
+    that are missing for users who have a UserMembership but no UserRole.
+    This is idempotent and safe to run multiple times.
+    """
+    try:
+        db = SessionLocal()
+        try:
+            from app.domains.auth.models import Role, RoleName, RoleScope, UserRole, UserMembership
+
+            # 1. Ensure system roles exist (idempotent seed)
+            role_defs = [
+                (RoleName.SUPER_ADMIN, "Super Administrator", RoleScope.PLATFORM),
+                (RoleName.ORG_ADMIN, "Organization Administrator", RoleScope.ORGANIZATION),
+                (RoleName.SCHOOL_ADMIN, "School Administrator", RoleScope.SCHOOL),
+                (RoleName.TEACHER, "Teacher", RoleScope.SCHOOL),
+                (RoleName.STUDENT, "Student", RoleScope.SCHOOL),
+            ]
+            for rname, rdesc, rscope in role_defs:
+                exists = db.query(Role).filter(Role.name == rname).first()
+                if not exists:
+                    db.add(Role(name=rname, description=rdesc, scope=rscope, is_system_role=True, is_active=True))
+                    logger.info(f"Startup: created missing role {rname}")
+            db.commit()
+
+            # 2. Backfill UserRole for every UserMembership that has no matching UserRole
+            from app.domains.auth.models import User as UserModel
+            orphan_memberships = (
+                db.query(UserMembership)
+                .outerjoin(
+                    UserRole,
+                    (UserRole.user_id == UserMembership.user_id) &
+                    (UserRole.role_id == UserMembership.role_id),
+                )
+                .filter(
+                    UserMembership.is_active == True,
+                    UserRole.id == None,
+                )
+                .all()
+            )
+            healed = 0
+            for membership in orphan_memberships:
+                user = db.query(UserModel).filter(UserModel.id == membership.user_id).first()
+                if not user or not user.tenant_id:
+                    continue
+                try:
+                    existing = db.query(UserRole).filter(
+                        UserRole.user_id == membership.user_id,
+                        UserRole.role_id == membership.role_id,
+                        UserRole.tenant_id == user.tenant_id,
+                    ).first()
+                    if not existing:
+                        db.add(UserRole(
+                            user_id=membership.user_id,
+                            role_id=membership.role_id,
+                            tenant_id=user.tenant_id,
+                        ))
+                        db.commit()  # commit per user so one failure doesn't roll back others
+                        healed += 1
+                except Exception as inner_err:
+                    logger.warning(f"Startup heal skipped user {membership.user_id}: {inner_err}")
+                    try:
+                        db.rollback()
+                    except Exception:
+                        pass
+            if healed:
+                logger.info(f"Startup: healed {healed} missing UserRole records")
+            else:
+                logger.info("Startup: no UserRole records needed healing")
+        except Exception as e:
+            logger.error(f"Startup role-heal failed (non-fatal): {e}", exc_info=True)
+            try:
+                db.rollback()
+            except Exception:
+                pass
+        finally:
+            db.close()
+    except Exception as e:
+        logger.error(f"Startup role-heal DB connection failed (non-fatal): {e}", exc_info=True)
+
+
+@app.on_event("startup")
 async def _start_gap_generation_worker() -> None:
     if not settings.LEARNING_HUB_AUTO_LLM_ENABLED:
         logger.info(
