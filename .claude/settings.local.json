@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pytest tests/core/test_security.py -v --tb=short)",
+      "Bash(python -m pytest tests/domains/auth/ -v --tb=short)",
+      "Bash(python -m pytest tests/domains/auth/ -v --tb=long)",
+      "Bash(python -m pytest tests/domains/auth/test_services.py::TestAuditService::test_log_event_creates_and_returns_audit_log tests/domains/auth/test_services.py::TestAuthServiceLogin::test_successful_login_returns_tokens_and_user tests/domains/auth/test_invite_service.py::TestCreateInvite::test_creates_invite_when_no_existing_pending -v --tb=short)",
+      "Bash(python -m pytest tests/domains/auth/test_invite_service.py::TestCreateInvite::test_creates_invite_when_no_existing_pending -v --tb=short)",
+      "Bash(python -m pytest tests/domains/auth/ tests/core/ tests/domains/subscriptions/ tests/domains/youtube_quiz/ tests/domains/pixgen/ tests/domains/user_history/ tests/domains/teacher_quiz/ tests/domains/teacher_exam/ tests/domains/teacher_assignment/ tests/domains/teacher_worksheet/ -v --tb=short)",
+      "Bash(python -m pytest tests/domains/auth/test_services.py::TestAuditService tests/domains/auth/test_services.py::TestAuthServiceRegister::test_register_weak_password_raises tests/domains/youtube_quiz/test_service.py::TestBuildStyleDistribution::test_three_styles_total_matches_count tests/domains/youtube_quiz/test_service.py::TestBuildFallbackQuiz::test_fallback_has_required_section_headings tests/domains/user_history/test_repository.py::TestTogglePin::test_pin_creates_new_pin_when_not_exists -v --tb=short)",
+      "Bash(python -m pytest tests/domains/auth/test_services.py::TestAuthServiceRegister::test_register_weak_password_raises tests/domains/youtube_quiz/test_service.py::TestBuildFallbackQuiz::test_fallback_has_required_section_headings tests/domains/user_history/test_repository.py::TestTogglePin::test_pin_creates_new_pin_when_not_exists tests/domains/youtube_quiz/test_service.py::TestBuildStyleDistribution::test_three_styles_total_matches_count -v --tb=long)",
+      "Bash(python -m pytest tests/domains/user_history/test_repository.py::TestTogglePin::test_pin_creates_new_pin_when_not_exists --tb=long)",
+      "Bash(python -m pytest tests/domains/auth/test_invite_service.py::TestCreateInvite::test_creates_invite_when_no_existing_pending tests/domains/youtube_quiz/test_service.py::TestBuildStyleDistribution::test_three_styles_total_matches_count --tb=short)",
+      "Bash(python -m pytest tests/domains/auth/test_invite_service.py::TestCreateInvite::test_creates_invite_when_no_existing_pending tests/domains/youtube_quiz/test_service.py::TestBuildStyleDistribution::test_three_styles_total_matches_count --tb=long)",
+      "Bash(python -m pytest tests/domains/auth/test_invite_service.py::TestCreateInvite::test_creates_invite_when_no_existing_pending tests/domains/youtube_quiz/test_service.py::TestBuildStyleDistribution::test_three_styles_total_matches_count -v)",
+      "Bash(python -m pytest tests/domains/auth/test_invite_service.py::TestCreateInvite::test_creates_invite_when_no_existing_pending tests/domains/youtube_quiz/test_service.py::TestBuildStyleDistribution::test_three_styles_total_matches_count -v --tb=long)",
+      "Bash(python -m pytest tests/ -q)",
+      "Bash(python -m pytest tests/core/ tests/domains/ -q)"
+    ]
+  }
+}
