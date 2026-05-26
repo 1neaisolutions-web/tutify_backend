@@ -81,6 +81,18 @@ class TestSectionLabelFromSchema:
         assert section_label_from_schema("challenge_brief", None) == "Challenge Brief"
         assert section_label_from_schema("challenge_brief", {}) == "Challenge Brief"
 
+    def test_504_uses_template_json_section_labels(self):
+        schema = {
+            "properties": {
+                "accommodations": {"title": "Exemplar", "type": "string"},
+            }
+        }
+        assert (
+            section_label_from_schema("accommodations", schema, "504-plan-generator")
+            == "Accommodations"
+        )
+        assert section_label_from_schema("goals", schema, "504-plan-generator") == "Goals"
+
 
 class TestSectionValueToMarkdownText:
     """Test section_value_to_markdown_text (no raw JSON)."""

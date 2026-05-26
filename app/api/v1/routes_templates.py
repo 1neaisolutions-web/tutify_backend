@@ -235,6 +235,27 @@ def get_template_detail(
     if latest_version:
         latest_version_public = TemplateVersionPublic.model_validate(latest_version)
 
+    output_schema = (
+        latest_version.output_schema
+        if latest_version and isinstance(getattr(latest_version, "output_schema", None), dict)
+        else None
+    )
+    from app.template_schema import load_template_schema
+
+    render_sections_raw = load_template_schema(template.slug, output_schema)
+    render_sections = (
+        [
+            {
+                "key": s["key"],
+                "label": s["label"],
+                "type": s.get("type", "markdown"),
+            }
+            for s in render_sections_raw
+        ]
+        if render_sections_raw
+        else None
+    )
+
     return TemplateDetail(
         id=template.id,
         slug=template.slug,
@@ -248,6 +269,7 @@ def get_template_detail(
         created_at=template.created_at,
         updated_at=template.updated_at,
         latest_version=latest_version_public,
+        render_sections=render_sections,
     )
 
 

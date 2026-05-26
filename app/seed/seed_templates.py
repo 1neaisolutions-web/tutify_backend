@@ -22,7 +22,9 @@ def get_default_model_config() -> Dict[str, Any]:
 
 def get_template_data() -> list[Dict[str, Any]]:
     """Get all template definitions with their versions matching detailed criteria."""
-    return [
+    from app.seed.exemplar_batch_patches import apply_exemplar_batch_patches
+
+    data = [
         {
             # TEMPLATE 1: General Lesson Planner
             "template": {
@@ -7294,25 +7296,48 @@ def get_template_data() -> list[Dict[str, Any]]:
                 "output_schema": {
                     "type": "object",
                     "title": "Plan504GeneratorOutput",
-                    "required": ["plan_504_draft"],
+                    "required": [
+                        "present_levels_of_performance",
+                        "accommodations",
+                        "goals",
+                        "monitoring_and_review",
+                    ],
                     "properties": {
-                        "plan_504_draft": {
+                        "present_levels_of_performance": {
                             "type": "string",
-                            "title": "Exemplar",
-                            "description": "Markdown 504 plan draft with present levels, supports, goals, and monitoring notes.",
-                        }
+                            "title": "Present Levels of Performance",
+                            "description": "Paragraph describing current performance and needs.",
+                        },
+                        "accommodations": {
+                            "type": "string",
+                            "title": "Accommodations",
+                            "description": "Markdown bullet list of classroom accommodations.",
+                        },
+                        "goals": {
+                            "type": "string",
+                            "title": "Goals",
+                            "description": "Markdown bullet list of measurable goals.",
+                        },
+                        "monitoring_and_review": {
+                            "type": "string",
+                            "title": "Monitoring and Review",
+                            "description": "Paragraph on progress monitoring and review schedule.",
+                        },
                     },
                 },
                 "stub_config": None,
                 "prompt_definition": {
                     "description": "Generate a practical draft 504 plan based on student profile details, including accommodations and progress-monitoring steps.",
-                    "context": "Output must match output_schema exactly with one field: plan_504_draft. Use markdown with substantial detail. Begin with a clear title line that includes '504 Plan Draft - Review closely before implementation'. Then include sections in this order: **Present Levels of Performance**, **Accommodations**, **Goals**, **Monitoring and Review**. Use bullet points in Accommodations and Goals. Keep language school-safe, strengths-based, and non-diagnostic; avoid real names and use placeholder references when needed. Do not output JSON.",
+                    "context": "Output must match output_schema exactly with these four fields: present_levels_of_performance, accommodations, goals, monitoring_and_review. Write HUMAN-READABLE markdown only (no JSON). present_levels_of_performance and monitoring_and_review must be prose paragraphs (no bullet lists). accommodations and goals must be markdown bullet lists only: every item on its own line starting with '- '. Keep language school-safe, strengths-based, and non-diagnostic; avoid real names and use placeholder references like [Student Name] when needed.",
                     "exemplar_input": {
                         "grade_level": "9th grade",
                         "student_profile_description": "Often fidgets with objects on the desk, unable to sit still for long periods. Easily distracted by classroom noise and activities. Frequently interrupts during group discussions, speaking out of turn. Struggles to wait for their turn to speak or participate. Has difficulty following multi-step instructions, often starts tasks but leaves them incomplete. Needs frequent reminders to stay on task."
                     },
                     "exemplar_output": {
-                        "plan_504_draft": "## 504 Plan Draft - Review closely before implementation\n\n### Present Levels of Performance\n[Student Name] demonstrates difficulty remaining seated and focused during class activities, often fidgeting with objects on the desk and becoming easily distracted by surrounding noise and movement. [He/She/They] frequently interrupts group discussions and struggles to wait for [his/her/their] turn to speak. Additionally, [Student Name] has challenges with following multi-step instructions, often starting tasks but leaving them incomplete, requiring regular reminders to stay on task.\n\n### Accommodations\n- Provide a designated fidget object that [Student Name] can use discreetly during class to help manage restlessness.\n- Allow [Student Name] to use noise-canceling headphones during independent work time to minimize distractions from the classroom environment.\n- Implement a \"turn-taking\" system during discussions to help [Student Name] wait for [his/her/their] turn to speak.\n- Break down multi-step instructions into smaller, manageable parts, and provide written instructions alongside verbal explanations.\n- Allow extended time for completing assignments and assessments to accommodate incomplete tasks and promote thoroughness.\n- Provide frequent check-ins and reminders to help [Student Name] stay focused and on task.\n\n### Goals\n- [Student Name] will remain seated and focused during classroom instruction for at least 80% of the time, as measured by teacher observations over a six-week period.\n- [Student Name] will participate in group discussions by waiting for [his/her/their] turn to speak at least 90% of the time, as documented by teacher notes during discussions over a semester.\n- [Student Name] will successfully complete 85% of multi-step assignments with minimal prompts by the end of the grading period.\n- [Student Name] will utilize a planner or checklist to track assignments and tasks, completing at least 4 out of 5 tasks on time each week over the next quarter.\n\n### Monitoring and Review\nThis 504 plan will be monitored through regular progress checks conducted by [Student Name]'s teachers, who will document observations and adjustments as needed. A review meeting will be scheduled every quarter to assess [Student Name]'s progress toward goals, discuss the effectiveness of accommodations, and make any necessary modifications to the plan to better support [his/her/their] learning needs. Input from [Student Name] will also be included to ensure [he/she/they] feels engaged in the process."
+                        "present_levels_of_performance": "[Student Name] demonstrates difficulty remaining seated and focused during class activities, often fidgeting with objects on the desk and becoming easily distracted by surrounding noise and movement. [He/She/They] frequently interrupts group discussions and struggles to wait for [his/her/their] turn to speak. Additionally, [Student Name] has challenges with following multi-step instructions, often starting tasks but leaving them incomplete, requiring regular reminders to stay on task.",
+                        "accommodations": "- Provide a designated fidget object that [Student Name] can use discreetly during class to help manage restlessness.\n- Allow [Student Name] to use noise-canceling headphones during independent work time to minimize distractions from the classroom environment.\n- Implement a \"turn-taking\" system during discussions to help [Student Name] wait for [his/her/their] turn to speak.\n- Break down multi-step instructions into smaller, manageable parts, and provide written instructions alongside verbal explanations.\n- Allow extended time for completing assignments and assessments to accommodate incomplete tasks and promote thoroughness.\n- Provide frequent check-ins and reminders to help [Student Name] stay focused and on task.",
+                        "goals": "- [Student Name] will remain seated and focused during classroom instruction for at least 80% of the time, as measured by teacher observations over a six-week period.\n- [Student Name] will participate in group discussions by waiting for [his/her/their] turn to speak at least 90% of the time, as documented by teacher notes during discussions over a semester.\n- [Student Name] will successfully complete 85% of multi-step assignments with minimal prompts by the end of the grading period.\n- [Student Name] will utilize a planner or checklist to track assignments and tasks, completing at least 4 out of 5 tasks on time each week over the next quarter.",
+                        "monitoring_and_review": "This 504 plan will be monitored through regular progress checks conducted by [Student Name]'s teachers, who will document observations and adjustments as needed. A review meeting will be scheduled every quarter to assess [Student Name]'s progress toward goals, discuss the effectiveness of accommodations, and make any necessary modifications to the plan to better support [his/her/their] learning needs. Input from [Student Name] will also be included to ensure [he/she/they] feels engaged in the process.",
                     },
                 },
             },
@@ -10157,6 +10182,8 @@ def get_template_data() -> list[Dict[str, Any]]:
             },
         },
     ]
+    apply_exemplar_batch_patches(data)
+    return data
 
 
 def seed_templates(db: Session, force: bool = False) -> Dict[str, int]:

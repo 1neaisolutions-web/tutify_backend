@@ -30,7 +30,12 @@ from app.schemas.template import (
     CommunicationSection,
 )
 from app.utils.stub_builder import build_stub_output as generic_build_stub_output
-from app.utils.markdown_converter import section_value_to_markdown_text, section_label_from_schema
+from app.utils.markdown_converter import (
+    section_value_to_markdown_text,
+    section_label_from_schema,
+    normalize_plan_markdown_headings,
+    finalize_plan_504_output,
+)
 from app.template_schema import load_template_schema
 
 logger = get_logger(__name__)
@@ -348,14 +353,14 @@ def _process_stream_buffer(
                     first_key = section_keys[0]
                     if section_key == first_key:
                         # Content belongs to this section
-                        label = section_label_from_schema(section_key, output_schema)
+                        label = section_label_from_schema(section_key, output_schema, template_slug)
                         events.append({"type": "section_start", "section": section_key, "label": label, "template_slug": template_slug})
                         norm_clean = _normalize_section_content_for_streaming(clean)
                         events.append({"type": "section_content", "section": section_key, "chunk": norm_clean, "content": norm_clean, "template_slug": template_slug})
                         emitted.add(section_key)
                         return (events, marker_end, section_key, emitted)
                     # Model skipped first section: emit first with content, then this section
-                    label_first = section_label_from_schema(first_key, output_schema)
+                    label_first = section_label_from_schema(first_key, output_schema, template_slug)
                     events.append({"type": "section_start", "section": first_key, "label": label_first, "template_slug": template_slug})
                     norm_clean = _normalize_section_content_for_streaming(clean)
                     events.append({"type": "section_content", "section": first_key, "chunk": norm_clean, "content": norm_clean, "template_slug": template_slug})
@@ -364,14 +369,14 @@ def _process_stream_buffer(
             # If we already emitted this section (e.g. from stall failsafe), don't duplicate section_start
             if section_key in emitted:
                 return (events, marker_end, section_key, emitted)
-            label = section_label_from_schema(section_key, output_schema)
+            label = section_label_from_schema(section_key, output_schema, template_slug)
             events.append({"type": "section_start", "section": section_key, "label": label, "template_slug": template_slug})
             emitted.add(section_key)
             return (events, marker_end, section_key, emitted)
         # Failsafe: no marker yet but lots of content
         if (len(buffer) - pos) >= FAILSAFE_NO_MARKER_CHARS and not stream_finished:
             first_key = section_keys[0]
-            label = section_label_from_schema(first_key, output_schema)
+            label = section_label_from_schema(first_key, output_schema, template_slug)
             chunk = _strip_section_markers(buffer[pos:].strip())
             if not chunk:
                 chunk = "Content unavailable."
@@ -417,7 +422,7 @@ def _process_stream_buffer(
         # Unknown key: stay in same section, advance past this marker and continue
         return (events, marker_end, current_section, emitted)
 
-    label = section_label_from_schema(section_key, output_schema)
+    label = section_label_from_schema(section_key, output_schema, template_slug)
     events.append({"type": "section_start", "section": section_key, "label": label, "template_slug": template_slug})
     emitted.add(section_key)
     return (events, marker_end, section_key, emitted)
@@ -447,7 +452,7 @@ def _flush_end_of_stream(
     for key in section_keys:
         if key in emitted:
             continue
-        label = section_label_from_schema(key, output_schema)
+        label = section_label_from_schema(key, output_schema, template_slug)
         events.append({"type": "section_start", "section": key, "label": label, "template_slug": template_slug})
         events.append({"type": "section_content", "section": key, "chunk": "Content unavailable.", "content": "Content unavailable.", "template_slug": template_slug})
         events.append({"type": "section_end", "section": key, "template_slug": template_slug})
@@ -927,7 +932,7 @@ class ExecutionService:
                 section_text = section_value_to_markdown_text(value) if value is not None else ""
                 if not (section_text and section_text.strip()):
                     section_text = "Content."
-                label = section_label_from_schema(section_key, output_schema)
+                label = section_label_from_schema(section_key, output_schema, template.slug)
                 yield {
                     "type": "section_start",
                     "section": section_key,
@@ -983,9 +988,29 @@ class ExecutionService:
                 section_keys = [s["key"] for s in sections_schema]
             if not section_keys:
                 section_keys = list((output_schema.get("properties") or {}).keys())
+            pd = template_version.prompt_definition or {}
+            exemplar_out = pd.get("exemplar_output") if isinstance(pd, dict) else None
+            if isinstance(exemplar_out, dict) and section_keys:
+                format_examples: List[str] = []
+                for key in section_keys:
+                    val = exemplar_out.get(key)
+                    if isinstance(val, str) and val.strip():
+                        format_examples.append(
+                            f"Example output for [[SECTION:{key}]] — match this markdown structure exactly:\n{val.strip()}"
+                        )
+                if format_examples:
+                    user_prompt = user_prompt.rstrip() + "\n\n" + "\n\n".join(format_examples)
             if section_keys:
                 marker_instruction = _streaming_section_marker_instruction(section_keys)
                 user_prompt = user_prompt.rstrip() + "\n\n" + marker_instruction
+                if template.slug == "504-plan-generator":
+                    user_prompt = user_prompt.rstrip() + (
+                        "\n\n504 PLAN SECTION RULES: Use one [[SECTION:...]] per field. "
+                        "[[SECTION:present_levels_of_performance]] and [[SECTION:monitoring_and_review]] "
+                        "must be single prose paragraphs. "
+                        "[[SECTION:accommodations]] and [[SECTION:goals]] must be bullet lists only "
+                        "(each line starts with '- '). Do not use ## headings inside sections."
+                    )
 
             model_config = template_version.model_config or {}
             router = cls._get_model_router()
@@ -1042,7 +1067,7 @@ class ExecutionService:
                             for key in section_keys:
                                 if key in emitted_section_keys:
                                     continue
-                                label = section_label_from_schema(key, output_schema)
+                                label = section_label_from_schema(key, output_schema, template.slug)
                                 yield {"type": "section_start", "section": key, "label": label, "template_slug": template.slug}
                                 _log_ev({"type": "section_start", "section": key})
                                 yield {"type": "section_content", "section": key, "chunk": "Content unavailable.", "content": "Content unavailable.", "template_slug": template.slug}
@@ -1089,9 +1114,15 @@ class ExecutionService:
                 section_keys = list(output_dict.keys())
             if not section_keys:
                 section_keys = list((output_schema.get("properties") or {}).keys()) or list(output_dict.keys())
+            if template.slug == "504-plan-generator":
+                output_dict = finalize_plan_504_output(output_dict)
             for k, v in list(output_dict.items()):
-                if isinstance(v, str) and _looks_like_json_or_object_fragment(v):
-                    output_dict[k] = _normalize_section_content_for_streaming(v)
+                if isinstance(v, str):
+                    if _looks_like_json_or_object_fragment(v):
+                        v = _normalize_section_content_for_streaming(v)
+                    if template.slug != "504-plan-generator":
+                        v = normalize_plan_markdown_headings(v, template.slug)
+                    output_dict[k] = v
             stub_dict = cls._build_stub_output_dict(template, template_version, input_data) if section_keys else {}
             merged_output = {}
             for key in section_keys:
@@ -1157,11 +1188,15 @@ class ExecutionService:
                     "Below is the exemplar output from this template."
                 )
                 for section_key in section_keys:
-                    label = section_label_from_schema(section_key, output_schema)
+                    label = section_label_from_schema(section_key, output_schema, template.slug)
                     raw_val = exemplar_dict.get(section_key)
                     section_text = (
                         section_value_to_markdown_text(raw_val) if raw_val is not None else ""
                     )
+                    if section_text and section_text.strip():
+                        section_text = normalize_plan_markdown_headings(
+                            section_text, template.slug
+                        )
                     if not (section_text and section_text.strip()):
                         section_text = "*(No exemplar content for this section.)*"
                     yield {

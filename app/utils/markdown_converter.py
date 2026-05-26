@@ -8,9 +8,22 @@ Provides:
 """
 import json
 import logging
+import re
 from typing import Dict, Any, List, Optional
 
+from app.template_schema import load_template_schema
+
 logger = logging.getLogger(__name__)
+
+# Section titles that are metadata labels, not document headings
+_DISALLOWED_SECTION_TITLES = frozenset({"exemplar"})
+
+_504_SECTION_HEADINGS = (
+    "Present Levels of Performance",
+    "Accommodations",
+    "Goals",
+    "Monitoring and Review",
+)
 
 
 def _humanize_key(key: str) -> str:
@@ -23,8 +36,21 @@ def humanize_key(key: str) -> str:
     return _humanize_key(key)
 
 
-def section_label_from_schema(section_key: str, output_schema: Optional[Dict[str, Any]] = None) -> str:
-    """Preferred section label: from output_schema property title, else humanized key."""
+def section_label_from_schema(
+    section_key: str,
+    output_schema: Optional[Dict[str, Any]] = None,
+    template_slug: Optional[str] = None,
+) -> str:
+    """Preferred label: templates/{slug}.json, then output_schema title (not 'Exemplar'), else humanized key."""
+    if template_slug:
+        try:
+            for entry in load_template_schema(template_slug, output_schema):
+                if entry.get("key") == section_key:
+                    label = entry.get("label")
+                    if isinstance(label, str) and label.strip():
+                        return label.strip()
+        except Exception:
+            pass
     if output_schema and isinstance(output_schema, dict):
         props = output_schema.get("properties") or {}
         if isinstance(props, dict):
@@ -32,8 +58,178 @@ def section_label_from_schema(section_key: str, output_schema: Optional[Dict[str
             if isinstance(prop, dict):
                 title = prop.get("title")
                 if isinstance(title, str) and title.strip():
-                    return title.strip()
+                    if title.strip().lower() not in _DISALLOWED_SECTION_TITLES:
+                        return title.strip()
     return _humanize_key(section_key)
+
+
+def normalize_plan_markdown_headings(text: str, template_slug: Optional[str] = None) -> str:
+    """
+    Normalize LLM prose (bold labels, duplicate titles) into ## markdown sections
+    used by 504 / IEP-style single-field plan templates.
+    """
+    if not text or not text.strip():
+        return text
+    s = text.strip()
+    if template_slug == "504-plan-generator":
+        s = re.sub(
+            r"^#+\s*504\s+Plan\s+Draft[^\n]*\n+",
+            "",
+            s,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+        s = re.sub(
+            r"^504\s+Plan\s+Draft[^\n]*\n+",
+            "",
+            s,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+        for heading in _504_SECTION_HEADINGS:
+            s = re.sub(
+                rf"^\s*\*\*{re.escape(heading)}:\*\*\s*",
+                f"## {heading}\n\n",
+                s,
+                flags=re.MULTILINE | re.IGNORECASE,
+            )
+            s = re.sub(
+                rf"^\s*\*\*{re.escape(heading)}\*\*\s*",
+                f"## {heading}\n\n",
+                s,
+                flags=re.MULTILINE | re.IGNORECASE,
+            )
+            s = re.sub(
+                rf"^\s*{re.escape(heading)}:\s*",
+                f"## {heading}\n\n",
+                s,
+                flags=re.MULTILINE | re.IGNORECASE,
+            )
+    else:
+        s = re.sub(
+            r"^\s*\*\*([^*\n]+):\*\*\s*",
+            r"## \1\n\n",
+            s,
+            flags=re.MULTILINE,
+        )
+    s = re.sub(r"\n{3,}", "\n\n", s)
+    return s.strip()
+
+
+def _escape_md_table_cell(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").replace("|", "\\|")).strip()
+
+
+def _lesson_flow_rows_to_markdown_table(items: List[Any]) -> Optional[str]:
+    """Render lesson_flow / 5E phase arrays as a markdown table when shape matches."""
+    if not items or not all(isinstance(item, dict) for item in items):
+        return None
+    rows: List[Dict[str, Any]] = [item for item in items if isinstance(item, dict)]
+    if not rows or not all(isinstance(r.get("phase"), str) and r.get("phase", "").strip() for r in rows):
+        return None
+
+    def _style(row: Dict[str, Any]) -> Optional[str]:
+        if row.get("teacher_role") or row.get("student_role"):
+            return "inquiry"
+        if row.get("activity"):
+            return "planner"
+        return None
+
+    style = _style(rows[0])
+    if not style or any(_style(r) != style for r in rows):
+        return None
+
+    lines: List[str] = []
+    if style == "inquiry":
+        lines.append("| Phase | Minutes | Teacher facilitation | Student actions |")
+        lines.append("| --- | ---: | --- | --- |")
+        for r in rows:
+            lines.append(
+                "| {phase} | {minutes} | {teacher} | {student} |".format(
+                    phase=_escape_md_table_cell(str(r.get("phase", ""))),
+                    minutes=r.get("minutes", ""),
+                    teacher=_escape_md_table_cell(str(r.get("teacher_role", ""))),
+                    student=_escape_md_table_cell(str(r.get("student_role", ""))),
+                )
+            )
+    else:
+        lines.append("| Phase | Minutes | Activity |")
+        lines.append("| --- | ---: | --- |")
+        for r in rows:
+            lines.append(
+                "| {phase} | {minutes} | {activity} |".format(
+                    phase=_escape_md_table_cell(str(r.get("phase", ""))),
+                    minutes=r.get("minutes", ""),
+                    activity=_escape_md_table_cell(str(r.get("activity", ""))),
+                )
+            )
+    return "\n".join(lines)
+
+
+def _bulletize_section_body(body: str) -> str:
+    """Turn paragraph blocks into a markdown bullet list when no bullets exist."""
+    body = (body or "").strip()
+    if not body or re.search(r"(?m)^\s*[-*•]\s+", body):
+        return body
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", body) if p.strip()]
+    if len(paragraphs) > 1:
+        return "\n".join(f"- {p}" for p in paragraphs)
+    sentences = re.split(r"(?<=[.!?])\s+(?=[A-Z\[])", body)
+    if len(sentences) >= 2:
+        return "\n".join(f"- {s.strip()}" for s in sentences if s.strip())
+    return body
+
+
+_PLAN_504_SECTION_ALIASES = {
+    "present levels of performance": "present_levels_of_performance",
+    "accommodations": "accommodations",
+    "goals": "goals",
+    "monitoring and review": "monitoring_and_review",
+}
+
+
+def split_plan_504_combined_markdown(text: str) -> Dict[str, str]:
+    """Split legacy single-field 504 markdown into four output_schema keys."""
+    result: Dict[str, str] = {}
+    if not text or not text.strip():
+        return result
+    s = normalize_plan_markdown_headings(text.strip(), "504-plan-generator")
+    parts = re.split(r"(?m)^##\s+(.+?)\s*$", s)
+    if len(parts) < 3:
+        return result
+    # parts[0] may be preamble; then alternating title, body, title, body...
+    idx = 1
+    while idx + 1 < len(parts):
+        title = parts[idx].strip().lower()
+        body = parts[idx + 1].strip()
+        key = _PLAN_504_SECTION_ALIASES.get(title)
+        if key and body:
+            if key in ("accommodations", "goals"):
+                body = _bulletize_section_body(body)
+            result[key] = body
+        idx += 2
+    return result
+
+
+def finalize_plan_504_output(output_dict: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize a 504 plan output dict (split legacy field, bulletize lists)."""
+    if not isinstance(output_dict, dict):
+        return output_dict
+    combined = output_dict.get("plan_504_draft")
+    if isinstance(combined, str) and combined.strip():
+        split = split_plan_504_combined_markdown(combined)
+        for k, v in split.items():
+            if v and not output_dict.get(k):
+                output_dict[k] = v
+    for key in ("accommodations", "goals"):
+        val = output_dict.get(key)
+        if isinstance(val, str) and val.strip():
+            output_dict[key] = _bulletize_section_body(val.strip())
+    for key in ("present_levels_of_performance", "monitoring_and_review"):
+        val = output_dict.get(key)
+        if isinstance(val, str):
+            output_dict[key] = val.strip()
+    return output_dict
 
 
 def _value_to_markdown(value: Any, parent_heading_level: int = 0) -> List[str]:
@@ -52,6 +248,9 @@ def _value_to_markdown(value: Any, parent_heading_level: int = 0) -> List[str]:
         text = value.strip()
         return [text] if text else []
     if isinstance(value, list):
+        table = _lesson_flow_rows_to_markdown_table(value)
+        if table:
+            return table.split("\n")
         for item in value:
             if isinstance(item, str):
                 text = item.strip()

@@ -188,6 +188,14 @@ class TemplateVersionPublic(BaseModel):
         populate_by_name = True
 
 
+class TemplateRenderSection(BaseModel):
+    """Section metadata for streaming / exemplar preview (from templates/{slug}.json)."""
+
+    key: str
+    label: str
+    type: str = "markdown"
+
+
 class TemplateDetail(BaseModel):
     """Schema for detailed template information."""
 
@@ -203,6 +211,7 @@ class TemplateDetail(BaseModel):
     created_at: datetime
     updated_at: datetime
     latest_version: Optional[TemplateVersionPublic] = None
+    render_sections: Optional[List[TemplateRenderSection]] = None
 
     class Config:
         from_attributes = True

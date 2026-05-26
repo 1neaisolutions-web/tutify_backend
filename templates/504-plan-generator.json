@@ -1,8 +1,23 @@
 {
   "sections": [
     {
-      "key": "plan_504_draft",
-      "label": "Exemplar",
+      "key": "present_levels_of_performance",
+      "label": "Present Levels of Performance",
+      "type": "markdown"
+    },
+    {
+      "key": "accommodations",
+      "label": "Accommodations",
+      "type": "markdown"
+    },
+    {
+      "key": "goals",
+      "label": "Goals",
+      "type": "markdown"
+    },
+    {
+      "key": "monitoring_and_review",
+      "label": "Monitoring and Review",
       "type": "markdown"
     }
   ]
