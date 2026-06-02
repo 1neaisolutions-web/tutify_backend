@@ -37,8 +37,20 @@ from app.domains.auth.models import (
     AuditEventType,
 )
 from app.domains.auth.services import AuditService
+from app.domains.auth.language_validation import is_valid_language_tag
 
 logger = get_logger(__name__)
+
+
+def _default_user_preferences(language: Optional[str] = None) -> Dict[str, str]:
+    lang = (language or "en-US").strip() or "en-US"
+    if not is_valid_language_tag(lang):
+        lang = "en-US"
+    return {
+        "theme": "system",
+        "language": lang,
+        "timezone": "UTC",
+    }
 
 
 class SignupStrategy(ABC):
@@ -126,6 +138,7 @@ class OrgAdminSignupStrategy(SignupStrategy):
             tenant_id=org.id,  # Default tenant for backward compatibility
             status=UserStatus.ACTIVE,
             email_verified=settings.ENVIRONMENT != "prod",  # Auto-verify in dev
+            preferences=_default_user_preferences(payload.get("language")),
         )
         self.db.add(user)
         self.db.flush()
@@ -275,6 +288,7 @@ class InstitutionAdminSignupStrategy(SignupStrategy):
             tenant_id=org.id,  # User's tenant_id references Tenant (org), not Institution
             status=UserStatus.ACTIVE,
             email_verified=settings.ENVIRONMENT != "prod",
+            preferences=_default_user_preferences(payload.get("language")),
         )
         self.db.add(user)
         self.db.flush()
@@ -389,6 +403,7 @@ class TeacherSignupStrategy(SignupStrategy):
             tenant_id=tenant_id,
             status=status,
             email_verified=email_verified,
+            preferences=_default_user_preferences(payload.get("language")),
         )
         self.db.add(user)
         self.db.flush()
@@ -534,6 +549,7 @@ class StudentSignupStrategy(SignupStrategy):
             tenant_id=tenant_id,
             status=status,
             email_verified=email_verified,
+            preferences=_default_user_preferences(payload.get("language")),
         )
         self.db.add(user)
         self.db.flush()
@@ -654,6 +670,7 @@ class ParentSignupStrategy(SignupStrategy):
             tenant_id=student.tenant_id,
             status=UserStatus.ACTIVE,
             email_verified=settings.ENVIRONMENT != "prod",
+            preferences=_default_user_preferences(payload.get("language")),
         )
         self.db.add(user)
         self.db.flush()
@@ -782,6 +799,7 @@ class InviteAcceptanceStrategy(SignupStrategy):
                 tenant_id=tenant_id,
                 status=UserStatus.ACTIVE,
                 email_verified=True,  # Invites are pre-verified
+                preferences=_default_user_preferences(payload.get("language")),
             )
             self.db.add(user)
             self.db.flush()

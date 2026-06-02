@@ -288,6 +288,7 @@ class SignupRequest(BaseModel):
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     phone: Optional[str] = None
+    language: Optional[str] = Field("en-US", max_length=20)
     
     # Role-specific payloads
     organization: Optional[Dict[str, Any]] = None  # For org_admin

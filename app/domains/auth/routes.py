@@ -73,12 +73,14 @@ from app.domains.personalization.services.personalization_sync_service import (
 )
 from sqlalchemy.orm import joinedload
 
+from app.domains.auth.language_data import WORLD_LANGUAGES
+from app.domains.auth.language_validation import is_valid_language_tag
+
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["auth"])
 
 _ALLOWED_THEMES = {"light", "dark", "system"}
-_ALLOWED_LANGUAGES = {"en-US", "es-ES", "fr-FR", "pt-BR", "de-DE"}
 _VALID_TIMEZONES: set[str] | None = None
 
 
@@ -104,6 +106,15 @@ def _build_preferences_response(raw: Optional[Dict[str, Any]]) -> UserPreference
 
 
 # ========== Public Auth Endpoints ==========
+
+@router.get("/languages", response_model=list[dict])
+async def list_languages():
+    """
+    Returns all supported world languages for the language selector dropdown.
+    Each entry: { "code": "en-US", "name": "English (United States)", "nativeName": "English" }
+    """
+    return WORLD_LANGUAGES
+
 
 @router.post("/auth/register", response_model=dict, status_code=status.HTTP_201_CREATED)
 async def register(
@@ -1042,8 +1053,11 @@ async def patch_my_preferences(
     """Merge update one or more preferences keys for the current user."""
     if body.theme is not None and body.theme not in _ALLOWED_THEMES:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid theme value")
-    if body.language is not None and body.language not in _ALLOWED_LANGUAGES:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported language code")
+    if body.language is not None and not is_valid_language_tag(body.language):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid language tag format.",
+        )
     if body.timezone is not None:
         valid_tzs = _get_valid_timezones()
         if valid_tzs and body.timezone not in valid_tzs:
