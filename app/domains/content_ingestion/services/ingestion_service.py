@@ -18,8 +18,10 @@ from app.core.logging import get_logger
 from app.core.config import settings
 from app.llm.config import llm_settings
 from app.domains.content_ingestion.models import (
-    Document, PageText, Chunk, DocumentProcessingRun, ContentPack
+    Document, PageText, Chunk, DocumentProcessingRun, ContentPack, DocumentTopic
 )
+from app.domains.content_ingestion.document_topics_service import populate_document_topics
+from app.domains.content_ingestion.providers.chunkers import validate_topic_assignment
 from app.domains.content_ingestion.enums import DocumentStatus
 from app.domains.content_ingestion.detection import (
     detect_mime_and_source,
@@ -70,6 +72,7 @@ _INGESTION_ACTIVE_STATUSES = frozenset(
         DocumentStatus.OCR_RUNNING.value,
         DocumentStatus.NORMALIZING.value,
         DocumentStatus.CHUNKING.value,
+        DocumentStatus.TOPIC_VALIDATION.value,
         DocumentStatus.EMBEDDING.value,
         DocumentStatus.INDEXING.value,
         DocumentStatus.QA_VALIDATION.value,
@@ -906,6 +909,8 @@ class IngestionService:
                 "chunks_topic_fallback_filled": topic_fallback_fill_count,
                 "catalog_toc_source": meta.get("toc_source"),
             }
+            assignment_report = validate_topic_assignment(chunks, document.chapter_map)
+            meta["topic_assignment_report"] = assignment_report
             document.processing_metadata = meta
             logger.info(
                 "role_tagging",
@@ -989,6 +994,25 @@ class IngestionService:
             processing_run.vectors_stored = stored_count
             processing_run.progress_percentage = 90
             self.db.commit()
+
+            # Topic validation + document_topics population (after chunks persisted)
+            await self._update_status(document_id, DocumentStatus.TOPIC_VALIDATION.value, processing_run)
+            document = self.db.query(Document).filter(Document.id == document_id).first()
+            if document:
+                topic_report = populate_document_topics(self.db, document, replace_existing=True)
+                validation_warnings = [
+                    {"chapter": title, "issue": "0 chunks assigned"}
+                    for title in topic_report.chapters_with_zero_chunks
+                ]
+                if validation_warnings:
+                    meta_tv = dict(document.processing_metadata or {})
+                    meta_tv["topic_validation_warnings"] = validation_warnings
+                    document.processing_metadata = meta_tv
+                    logger.warning(
+                        "topic_validation_warnings",
+                        extra={"document_id": str(document_id), "warnings": validation_warnings},
+                    )
+                self.db.commit()
             
             # Step 7: QA Validation
             await self._update_status(document_id, DocumentStatus.QA_VALIDATION.value, processing_run)
@@ -1425,6 +1449,7 @@ class IngestionService:
             DocumentStatus.OCR_RUNNING.value: 20,
             DocumentStatus.NORMALIZING.value: 30,
             DocumentStatus.CHUNKING.value: 40,
+            DocumentStatus.TOPIC_VALIDATION.value: 55,
             DocumentStatus.EMBEDDING.value: 60,
             DocumentStatus.INDEXING.value: 80,
             DocumentStatus.QA_VALIDATION.value: 90,

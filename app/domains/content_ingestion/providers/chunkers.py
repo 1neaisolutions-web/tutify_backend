@@ -14,6 +14,20 @@ from app.domains.content_ingestion.providers.base import Chunker, Chunk, PageTex
 logger = get_logger(__name__)
 
 MATH_BLOCK_PATTERN = re.compile(r"\[\[MATH\]\](.*?)\[\[/MATH\]\]", re.DOTALL)
+PAGE_PROXIMITY_THRESHOLD = 5
+
+CHAPTER_HEADING_PATTERNS = [
+    re.compile(r"^(chapter|unit|section|module|part|lesson)\s+\d+", re.I),
+    re.compile(r"^(capítulo|unidad|sección)\s+\d+", re.I),
+    re.compile(r"^(chapitre|unité|section)\s+\d+", re.I),
+    re.compile(r"^(kapitel|einheit|abschnitt)\s+\d+", re.I),
+]
+
+TOC_LINE_PATTERNS = [
+    re.compile(r"(.+?)\s*\.{2,}\s*(\d+)\s*$"),
+    re.compile(r"(.+?)\s{3,}(\d+)\s*$"),
+    re.compile(r"(.+?)\s+(\d+)\s*$"),
+]
 
 
 def _split_into_segments(text: str) -> List[Tuple[str, bool]]:
@@ -57,31 +71,10 @@ class SimpleChunker(Chunker):
     def _assign_topic(
         self,
         page_no: int,
-        chapter_map: Optional[List[Dict[str, Any]]]
+        chapter_map: Optional[List[Dict[str, Any]]],
+        page_offset: int = 0,
     ) -> tuple[Optional[str], Optional[str]]:
-        """
-        Assign topic_id and topic_title based on page number and chapter map.
-        
-        Args:
-            page_no: Page number (1-indexed)
-            chapter_map: List of chapter objects with start_page, end_page
-            
-        Returns:
-            Tuple of (topic_id, topic_title) or (None, None)
-        """
-        if not chapter_map:
-            return None, None
-        
-        for chapter in chapter_map:
-            start_page = chapter.get("start_page_pdf", 0)
-            end_page = chapter.get("end_page_pdf", 0)
-            
-            if start_page <= page_no <= end_page:
-                topic_id = chapter.get("id")
-                topic_title = chapter.get("title")
-                return topic_id, topic_title
-        
-        return None, None
+        return _assign_topic_by_page_range(page_no, chapter_map, page_offset)
     
     def chunk(
         self,
@@ -105,6 +98,10 @@ class SimpleChunker(Chunker):
         """
         if not pages:
             return []
+
+        page_offset = 0
+        if chapter_map:
+            page_offset = _detect_page_offset(pages, chapter_map)
         
         logger.info(f"Chunking {len(pages)} pages (chunk_size={chunk_size_tokens}, overlap={overlap_tokens})")
         
@@ -128,7 +125,8 @@ class SimpleChunker(Chunker):
                     chunk_id = f"chunk_{chunk_counter:06d}"
                     topic_id, topic_title = self._assign_topic(
                         current_chunk_pages[0] if current_chunk_pages else page.page_no,
-                        chapter_map
+                        chapter_map,
+                        page_offset,
                     )
                     chunks.append(Chunk(
                         chunk_id=chunk_id,
@@ -149,7 +147,7 @@ class SimpleChunker(Chunker):
                     if is_math or seg_tokens <= chunk_size_tokens:
                         if current_chunk_tokens + seg_tokens > chunk_size_tokens and current_chunk_text:
                             chunk_id = f"chunk_{chunk_counter:06d}"
-                            topic_id, topic_title = self._assign_topic(page.page_no, chapter_map)
+                            topic_id, topic_title = self._assign_topic(page.page_no, chapter_map, page_offset)
                             chunks.append(Chunk(chunk_id=chunk_id, text=current_chunk_text, page_start=page.page_no, page_end=page.page_no, topic_id=topic_id, topic_title=topic_title))
                             chunk_counter += 1
                             current_chunk_text = ""
@@ -167,7 +165,7 @@ class SimpleChunker(Chunker):
                         if current_word_tokens + word_tokens > chunk_size_tokens and current_words:
                             chunk_text = " ".join(current_words)
                             chunk_id = f"chunk_{chunk_counter:06d}"
-                            topic_id, topic_title = self._assign_topic(page.page_no, chapter_map)
+                            topic_id, topic_title = self._assign_topic(page.page_no, chapter_map, page_offset)
                             chunks.append(Chunk(
                                 chunk_id=chunk_id,
                                 text=chunk_text,
@@ -195,7 +193,7 @@ class SimpleChunker(Chunker):
                     if current_words:
                         chunk_text = " ".join(current_words)
                         chunk_id = f"chunk_{chunk_counter:06d}"
-                        topic_id, topic_title = self._assign_topic(page.page_no, chapter_map)
+                        topic_id, topic_title = self._assign_topic(page.page_no, chapter_map, page_offset)
                         chunks.append(Chunk(
                             chunk_id=chunk_id,
                             text=chunk_text,
@@ -214,7 +212,8 @@ class SimpleChunker(Chunker):
                 chunk_hash = hashlib.sha256(current_chunk_text.encode()).hexdigest()
                 topic_id, topic_title = self._assign_topic(
                     current_chunk_pages[0] if current_chunk_pages else page.page_no,
-                    chapter_map
+                    chapter_map,
+                    page_offset,
                 )
                 
                 chunks.append(Chunk(
@@ -262,7 +261,8 @@ class SimpleChunker(Chunker):
             chunk_id = f"chunk_{chunk_counter:06d}"
             topic_id, topic_title = self._assign_topic(
                 current_chunk_pages[0] if current_chunk_pages else pages[-1].page_no,
-                chapter_map
+                chapter_map,
+                page_offset,
             )
             
             chunks.append(Chunk(
@@ -276,3 +276,82 @@ class SimpleChunker(Chunker):
         
         logger.info(f"Created {len(chunks)} chunks from {len(pages)} pages")
         return chunks
+
+
+def _page_bounds(chapter: Dict[str, Any]) -> tuple[int, int]:
+    start = chapter.get("start_page_pdf") or chapter.get("start_page") or 0
+    end = chapter.get("end_page_pdf") or chapter.get("end_page") or 0
+    return int(start), int(end)
+
+
+def _find_nearest_chapter(page_no: int, chapter_map: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    nearest = None
+    best_dist = None
+    for chapter in chapter_map:
+        start, _ = _page_bounds(chapter)
+        dist = abs(page_no - start)
+        if best_dist is None or dist < best_dist:
+            best_dist = dist
+            nearest = chapter
+    return nearest
+
+
+def _assign_topic_by_page_range(
+    page_no: int,
+    chapter_map: Optional[List[Dict[str, Any]]],
+    page_offset: int = 0,
+) -> tuple[Optional[str], Optional[str]]:
+    if not chapter_map:
+        return None, None
+    corrected = page_no + page_offset
+    for chapter in chapter_map:
+        start, end = _page_bounds(chapter)
+        if start <= corrected <= end:
+            return chapter.get("id"), chapter.get("title")
+    nearest = _find_nearest_chapter(corrected, chapter_map)
+    if nearest:
+        start, _ = _page_bounds(nearest)
+        if abs(corrected - start) <= PAGE_PROXIMITY_THRESHOLD:
+            return nearest.get("id"), nearest.get("title")
+    return None, None
+
+
+def _detect_page_offset(pages: List[PageText], chapter_map: List[Dict[str, Any]]) -> int:
+    """Detect PDF page numbering offset using heading patterns on early pages."""
+    if not pages or not chapter_map:
+        return 0
+    first_chapter = min(chapter_map, key=lambda c: _page_bounds(c)[0])
+    start, _ = _page_bounds(first_chapter)
+    title = (first_chapter.get("title") or "").lower()
+    for page in pages[: min(20, len(pages))]:
+        text_lower = (page.text or "").lower()
+        if title and title[:20] in text_lower:
+            return start - page.page_no
+        for pat in CHAPTER_HEADING_PATTERNS:
+            if pat.search(text_lower.split("\n", 1)[0].strip()):
+                return start - page.page_no
+    return 0
+
+
+def validate_topic_assignment(
+    chunks: List[Chunk],
+    chapter_map: Optional[List[Dict[str, Any]]],
+) -> Dict[str, Any]:
+    """Post-chunking report: coverage and chapters with zero assigned chunks."""
+    total = len(chunks)
+    assigned = sum(1 for c in chunks if c.topic_id)
+    empty_chapters: List[str] = []
+    if chapter_map:
+        for ch in chapter_map:
+            cid = ch.get("id")
+            title = ch.get("title") or cid
+            if cid and not any(c.topic_id == cid for c in chunks):
+                if not str(cid).startswith("scope:pages"):
+                    empty_chapters.append(str(title))
+    coverage = assigned / total if total else 0.0
+    return {
+        "total_chunks": total,
+        "chunks_assigned": assigned,
+        "coverage": coverage,
+        "chapters_with_zero_chunks": empty_chapters,
+    }

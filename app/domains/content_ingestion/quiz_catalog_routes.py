@@ -19,6 +19,8 @@ from app.domains.content_ingestion.quiz_catalog_schemas import (
     CatalogBookCard,
     CatalogListParams,
     CatalogListResponse,
+    CatalogStructureRequest,
+    CatalogStructureResponse,
     ScopePreviewRequest,
     ScopePreviewResponse,
     TopicsRequest,
@@ -118,6 +120,8 @@ def list_catalog(
     "/catalog/topics",
     response_model=TopicsResponse,
     summary="Get aggregated topic strands for the given content packs",
+    deprecated=True,
+    description="Deprecated: use POST /catalog/structure for hierarchical topic trees with stable IDs.",
 )
 def get_catalog_topics(
     body: TopicsRequest,
@@ -152,6 +156,41 @@ def get_catalog_topics(
     except Exception:
         logger.error(
             "quiz_catalog_topics_error",
+            extra={"tenant_id": str(current_user.tenant_id)},
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        )
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/quiz/catalog/structure
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/catalog/structure",
+    response_model=CatalogStructureResponse,
+    summary="Get hierarchical book-chapter-topic structure for content packs",
+)
+def get_catalog_structure(
+    body: CatalogStructureRequest,
+    current_user: User = Depends(require_any_role(*_ALLOWED_ROLES)),
+    db: Session = Depends(get_db),
+) -> CatalogStructureResponse:
+    """Return per-document topic trees with stable document_topics.id UUIDs."""
+    try:
+        service = QuizCatalogService(db)
+        return service.get_catalog_structure(
+            tenant_id=current_user.tenant_id,
+            pack_ids=body.pack_ids,
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        logger.error(
+            "quiz_catalog_structure_error",
             extra={"tenant_id": str(current_user.tenant_id)},
             exc_info=True,
         )

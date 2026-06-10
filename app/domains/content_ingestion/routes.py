@@ -799,6 +799,55 @@ async def run_qa_validation(
     return qa_validation
 
 
+@router.post("/admin/documents/{document_id}/reprocess-topics")
+async def reprocess_document_topics(
+    document_id: UUID,
+    current_user: User = Depends(require_any_role("super_admin", "org_admin")),
+    db: Session = Depends(get_db),
+):
+    """Rebuild document_topics and chunks.topic_fk without re-OCR or re-embedding."""
+    service = DocumentService(db)
+    document = service.get_document(document_id, current_user.tenant_id)
+    if not document:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+
+    from app.domains.content_ingestion.document_topics_service import populate_document_topics
+
+    report = populate_document_topics(db, document, replace_existing=True)
+    db.commit()
+    db.refresh(document)
+    return {
+        "document_id": str(document_id),
+        "topic_count": len(document.document_topics or []),
+        "coverage": report.coverage,
+        "chapters_with_zero_chunks": report.chapters_with_zero_chunks,
+    }
+
+
+@router.get("/admin/documents/health-summary")
+async def document_topics_health_summary(
+    current_user: User = Depends(require_any_role("super_admin")),
+    db: Session = Depends(get_db),
+):
+    """Admin dashboard: document topic indexing health metrics."""
+    from sqlalchemy import text
+
+    rows = db.execute(
+        text(
+            """
+            SELECT document_id, filename, status, total_topics, empty_topics,
+                   fallback_topics, total_chunks, chapter_coverage_pct
+            FROM document_topics_health
+            WHERE tenant_id = :tenant_id
+            ORDER BY chapter_coverage_pct ASC NULLS FIRST
+            LIMIT 200
+            """
+        ),
+        {"tenant_id": str(current_user.tenant_id)},
+    ).mappings().all()
+    return {"items": [dict(r) for r in rows]}
+
+
 @router.post("/admin/documents/{document_id}/publish", response_model=schemas.DocumentResponse)
 async def publish_document(
     document_id: UUID,

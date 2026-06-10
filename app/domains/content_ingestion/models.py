@@ -105,6 +105,9 @@ class Document(Base):
     pack = relationship("ContentPack", back_populates="documents")
     pages = relationship("PageText", back_populates="document", cascade="all, delete-orphan")
     chunks = relationship("Chunk", back_populates="document", cascade="all, delete-orphan")
+    document_topics = relationship(
+        "DocumentTopic", back_populates="document", cascade="all, delete-orphan"
+    )
     processing_runs = relationship("DocumentProcessingRun", back_populates="document", cascade="all, delete-orphan")
     qa_validations = relationship("QAValidation", back_populates="document", cascade="all, delete-orphan")
     math_blocks = relationship("MathBlock", back_populates="document", cascade="all, delete-orphan")
@@ -192,6 +195,12 @@ class Chunk(Base):
     # Chapter/topic mapping
     topic_id = Column(String(100), nullable=True, index=True)  # From chapter_map
     topic_title = Column(String(500), nullable=True)
+    topic_fk = Column(
+        UUID(as_uuid=True),
+        ForeignKey("document_topics.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     
     # Embedding (legacy: fixed 1536 for backwards compatibility)
     embedding = Column(Vector(1536), nullable=True)  # OpenAI text-embedding-3-small dimension
@@ -209,16 +218,63 @@ class Chunk(Base):
     
     # Relationships
     document = relationship("Document", back_populates="chunks")
-    
+    document_topic = relationship("DocumentTopic", back_populates="chunks")
+
     # Indexes
     __table_args__ = (
         UniqueConstraint("document_id", "chunk_id", name="uq_chunks_doc_chunk"),
         Index("idx_chunks_doc_topic", "document_id", "topic_id"),
+        Index("idx_chunks_topic_fk", "topic_fk"),
         Index("idx_chunks_embedding", "embedding", postgresql_using="ivfflat", postgresql_with={"lists": 100}),
     )
     
     def __repr__(self) -> str:
         return f"<Chunk(id={self.id}, document_id={self.document_id}, chunk_id={self.chunk_id})>"
+
+
+class DocumentTopic(Base):
+    """Stable hierarchical topic node within a document (chapter / section)."""
+
+    __tablename__ = "document_topics"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
+    document_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("documents.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    topic_key = Column(String(100), nullable=False)
+    parent_key = Column(String(100), nullable=True)
+    level = Column(Integer, nullable=False, default=1)
+    display_title = Column(String(500), nullable=False)
+    start_page_pdf = Column(Integer, nullable=True)
+    end_page_pdf = Column(Integer, nullable=True)
+    sort_order = Column(Integer, nullable=False, default=0)
+    chunk_count = Column(Integer, nullable=False, default=0)
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    document = relationship("Document", back_populates="document_topics")
+    chunks = relationship("Chunk", back_populates="document_topic")
+
+    __table_args__ = (
+        UniqueConstraint("document_id", "topic_key", name="uq_document_topic"),
+        Index("idx_document_topics_document", "document_id"),
+        Index("idx_document_topics_parent", "document_id", "parent_key"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<DocumentTopic(id={self.id}, topic_key={self.topic_key})>"
 
 
 class DocumentProcessingRun(Base):

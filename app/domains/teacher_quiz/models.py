@@ -59,6 +59,8 @@ class TeacherQuiz(Base):
     # RAG scope (pack IDs, topics, refinement)
     source_pack_ids = Column(JSONB, nullable=False, default=list)  # list[str] UUID strings
     scope_topics = Column(JSONB, nullable=False, default=list)  # list[str]
+    scope_topic_ids = Column(JSONB, nullable=True)  # list[str] document_topics.id UUIDs
+    scope_book_ids = Column(JSONB, nullable=True)  # [{pack_id, doc_id, topic_ids[]}]
     scope_refinement = Column(Text, nullable=True)
     topic_summary = Column(Text, nullable=True)  # pre-computed display label
     generate_without_sources = Column(Boolean, nullable=False, default=False)

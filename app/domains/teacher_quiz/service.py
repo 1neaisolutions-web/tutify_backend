@@ -11,7 +11,8 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.domains.auth.models import User
-from app.domains.teacher_quiz.errors import QuizError, generation_failed, not_found, validation_failed
+from app.domains.content_ingestion.topic_scope import RetrievalScopeError
+from app.domains.teacher_quiz.errors import QuizError, generation_failed, not_found, retrieval_scope_failed, validation_failed
 from app.domains.teacher_quiz.generation import QuizGenerationService
 from app.domains.teacher_quiz.models import TeacherQuiz, TeacherQuizGenerationRun, TeacherQuizQuestion
 from app.domains.teacher_quiz.repository import QuizListFilters, TeacherQuizRepository
@@ -25,6 +26,16 @@ def _topic_summary(scope_topics: List[str], scope_refinement: Optional[str]) -> 
     if scope_refinement and scope_refinement.strip():
         return f"{base} — {scope_refinement.strip()}" if base else scope_refinement.strip()
     return base or "General scope"
+
+
+def _parse_scope_topic_ids(raw: Optional[List[Any]]) -> List[UUID]:
+    out: List[UUID] = []
+    for item in raw or []:
+        try:
+            out.append(UUID(str(item)))
+        except (ValueError, TypeError):
+            continue
+    return out
 
 
 def _compute_total_marks(questions: List[TeacherQuizQuestion]) -> float:
@@ -77,6 +88,8 @@ class TeacherQuizService:
             due_at=payload.get("dueAt"),
             source_pack_ids=list(payload.get("sourceBookIds") or []),
             scope_topics=list(payload.get("scopeTopics") or []),
+            scope_topic_ids=list(payload.get("scopeTopicIds") or []),
+            scope_book_ids=payload.get("scopeBookIds"),
             scope_refinement=payload.get("scopeRefinement"),
             topic_summary=_topic_summary(list(payload.get("scopeTopics") or []), payload.get("scopeRefinement")),
             generate_without_sources=bool(payload.get("generateWithoutSources") or False),
@@ -114,6 +127,8 @@ class TeacherQuizService:
             ("dueAt", "due_at"),
             ("sourceBookIds", "source_pack_ids"),
             ("scopeTopics", "scope_topics"),
+            ("scopeTopicIds", "scope_topic_ids"),
+            ("scopeBookIds", "scope_book_ids"),
             ("scopeRefinement", "scope_refinement"),
             ("generateWithoutSources", "generate_without_sources"),
             ("difficulty", "difficulty"),
@@ -250,13 +265,22 @@ class TeacherQuizService:
             except Exception:
                 raise validation_failed("Invalid pack IDs on quiz.")
             if pack_ids:
-                rr = self.retrieval.retrieve(
-                    tenant_id=current_user.tenant_id,
-                    pack_ids=pack_ids,
-                    topics=list(quiz.scope_topics or []),
-                    refinement=quiz.scope_refinement,
-                    max_chunks=8,  # smaller window — just one question
-                )
+                try:
+                    rr = self.retrieval.retrieve(
+                        tenant_id=current_user.tenant_id,
+                        pack_ids=pack_ids,
+                        topics=list(quiz.scope_topics or []),
+                        scope_topic_ids=_parse_scope_topic_ids(quiz.scope_topic_ids),
+                        refinement=quiz.scope_refinement,
+                        max_chunks=8,
+                        generate_without_sources=bool(quiz.generate_without_sources),
+                    )
+                except RetrievalScopeError as e:
+                    raise retrieval_scope_failed(
+                        e.message,
+                        topic_ids=e.topic_ids,
+                        fallback_available=e.fallback_available,
+                    ) from e
                 context_text = rr.context_text
 
         # Generate exactly 1 question of the same type
@@ -343,13 +367,22 @@ class TeacherQuizService:
             except Exception:
                 raise validation_failed("Invalid pack IDs on quiz.")
 
-            rr = self.retrieval.retrieve(
-                tenant_id=current_user.tenant_id,
-                pack_ids=pack_ids,
-                topics=list(quiz.scope_topics or []),
-                refinement=quiz.scope_refinement,
-                max_chunks=18,
-            )
+            try:
+                rr = self.retrieval.retrieve(
+                    tenant_id=current_user.tenant_id,
+                    pack_ids=pack_ids,
+                    topics=list(quiz.scope_topics or []),
+                    scope_topic_ids=_parse_scope_topic_ids(quiz.scope_topic_ids),
+                    refinement=quiz.scope_refinement,
+                    max_chunks=18,
+                    generate_without_sources=bool(quiz.generate_without_sources),
+                )
+            except RetrievalScopeError as e:
+                raise retrieval_scope_failed(
+                    e.message,
+                    topic_ids=e.topic_ids,
+                    fallback_available=e.fallback_available,
+                ) from e
             context_text = rr.context_text
             citations = rr.citations
             retrieval_warnings.extend(rr.warnings)

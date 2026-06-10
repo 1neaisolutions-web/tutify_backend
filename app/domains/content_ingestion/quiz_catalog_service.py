@@ -14,12 +14,18 @@ from sqlalchemy.sql import ColumnElement
 
 from app.core.logging import get_logger
 from app.domains.content_ingestion.enums import DocumentStatus
-from app.domains.content_ingestion.models import Chunk, ContentPack, Document
+from app.domains.content_ingestion.document_topics_service import resolve_topic_ids_with_descendants
+from app.domains.content_ingestion.models import Chunk, ContentPack, Document, DocumentTopic
 from app.domains.content_ingestion.quiz_catalog_schemas import (
     CatalogBookCard,
     CatalogListParams,
+    CatalogStructureResponse,
+    DocumentStructure,
+    PackStructure,
+    PerDocumentScopePreview,
     ScopePreviewRequest,
     ScopePreviewResponse,
+    TopicNode,
     TopicStrand,
     TopicsResponse,
 )
@@ -369,6 +375,126 @@ class QuizCatalogService:
         )
         return TopicsResponse(topics=topics, pack_count=len(valid_pack_ids))
 
+    def _build_topic_tree(self, topics: List[DocumentTopic]) -> List[TopicNode]:
+        """Build hierarchical TopicNode list from flat DocumentTopic rows."""
+        visible = [t for t in topics if t.chunk_count > 0]
+        by_key = {t.topic_key: t for t in visible}
+        children_map: dict[str, list[DocumentTopic]] = {}
+        roots: list[DocumentTopic] = []
+        for t in visible:
+            if t.parent_key and t.parent_key in by_key:
+                children_map.setdefault(t.parent_key, []).append(t)
+            else:
+                roots.append(t)
+        roots.sort(key=lambda x: x.sort_order)
+
+        def to_node(row: DocumentTopic) -> TopicNode:
+            kids = sorted(children_map.get(row.topic_key, []), key=lambda x: x.sort_order)
+            return TopicNode(
+                id=row.id,
+                topic_key=row.topic_key,
+                display_title=row.display_title,
+                level=row.level,
+                chunk_count=row.chunk_count,
+                start_page=row.start_page_pdf,
+                end_page=row.end_page_pdf,
+                children=[to_node(k) for k in kids if k.chunk_count > 0],
+            )
+
+        return [to_node(r) for r in roots]
+
+    def get_catalog_structure(
+        self,
+        tenant_id: UUID,
+        pack_ids: List[UUID],
+    ) -> CatalogStructureResponse:
+        """Return per-pack hierarchical document topic trees with stable UUIDs."""
+        if not pack_ids:
+            return CatalogStructureResponse(packs=[])
+
+        valid_packs: List[ContentPack] = (
+            self.db.query(ContentPack)
+            .filter(
+                ContentPack.id.in_(pack_ids),
+                ContentPack.tenant_id == tenant_id,
+                ContentPack.is_active.is_(True),
+            )
+            .order_by(ContentPack.name.asc())
+            .all()
+        )
+        if not valid_packs:
+            return CatalogStructureResponse(packs=[])
+
+        pack_structures: List[PackStructure] = []
+        for pack in valid_packs:
+            documents: List[Document] = (
+                self.db.query(Document)
+                .filter(
+                    Document.pack_id == pack.id,
+                    Document.status == DocumentStatus.PUBLISHED.value,
+                    Document.tenant_id == tenant_id,
+                )
+                .order_by(Document.filename.asc())
+                .all()
+            )
+            doc_structures: List[DocumentStructure] = []
+            for doc in documents:
+                topics: List[DocumentTopic] = (
+                    self.db.query(DocumentTopic)
+                    .filter(DocumentTopic.document_id == doc.id)
+                    .order_by(DocumentTopic.sort_order.asc())
+                    .all()
+                )
+                total_chunks = (
+                    self.db.query(func.count(Chunk.id))
+                    .filter(Chunk.document_id == doc.id)
+                    .scalar()
+                    or 0
+                )
+                has_fallbacks = any(
+                    t.topic_key.startswith("scope:pages") for t in topics if t.chunk_count > 0
+                )
+                doc_structures.append(
+                    DocumentStructure(
+                        document_id=doc.id,
+                        document_title=doc.title or doc.filename,
+                        total_chunks=total_chunks,
+                        topic_tree=self._build_topic_tree(topics),
+                        has_page_bin_fallbacks=has_fallbacks,
+                    )
+                )
+            pack_structures.append(
+                PackStructure(
+                    pack_id=pack.id,
+                    pack_name=pack.name,
+                    subject=pack.subject,
+                    grade=pack.grade,
+                    documents=doc_structures,
+                )
+            )
+
+        return CatalogStructureResponse(packs=pack_structures)
+
+    def _scope_chunk_filters(
+        self,
+        tenant_id: UUID,
+        matched_pack_ids: List[UUID],
+        req: ScopePreviewRequest,
+    ) -> Tuple[List[ColumnElement], bool]:
+        """Return SQLAlchemy filter clauses and whether topic filter is active."""
+        clean_topics = [t.strip() for t in req.topics if t and t.strip()]
+        if req.topic_ids:
+            resolved = resolve_topic_ids_with_descendants(
+                self.db,
+                req.topic_ids,
+                include_sub_topics=req.include_sub_topics,
+            )
+            if resolved:
+                return [Chunk.topic_fk.in_(resolved)], True
+        if _topic_strings_apply_chunk_filter(clean_topics):
+            return [_chunks_match_topic_strings_clause(clean_topics)], True
+        return [], False
+
     def get_scope_preview(
         self,
         tenant_id: UUID,
@@ -411,29 +537,14 @@ class QuizCatalogService:
             )
 
         # Base chunk query — published docs in these packs
-        chunk_query = (
-            self.db.query(Chunk)
-            .join(Document, Chunk.document_id == Document.id)
-            .filter(
-                Document.pack_id.in_(matched_pack_ids),
-                Document.status == DocumentStatus.PUBLISHED.value,
-                Document.tenant_id == tenant_id,
-            )
+        count_filters, apply_topic_filter = self._scope_chunk_filters(
+            tenant_id, matched_pack_ids, req
         )
-
         clean_topics = [t.strip() for t in req.topics if t and t.strip()]
-        apply_topic_filter = _topic_strings_apply_chunk_filter(clean_topics)
-        topic_clause = (
-            _chunks_match_topic_strings_clause(clean_topics) if apply_topic_filter else None
-        )
 
-        if apply_topic_filter and topic_clause is not None:
-            chunk_query = chunk_query.filter(topic_clause)
-
-        # Count total chunks (estimated_segments) — single query
-        count_filters: List[ColumnElement] = []
-        if apply_topic_filter and topic_clause is not None:
-            count_filters.append(topic_clause)
+        if req.refinement and req.refinement.strip():
+            term = f"%{req.refinement.strip().lower()}%"
+            count_filters = list(count_filters) + [func.lower(Chunk.text).ilike(term)]
 
         estimated_segments: int = (
             self.db.query(func.count(Chunk.id))
@@ -448,7 +559,6 @@ class QuizCatalogService:
             or 0
         )
 
-        # Count distinct document sources
         sources_count: int = (
             self.db.query(func.count(func.distinct(Document.id)))
             .join(Chunk, Chunk.document_id == Document.id)
@@ -462,21 +572,75 @@ class QuizCatalogService:
             or 0
         )
 
-        # Count distinct chunk topic_title values (only meaningful when filtering by real strands)
-        topics_count: int = (
-            self.db.query(func.count(func.distinct(Chunk.topic_title)))
-            .join(Document, Chunk.document_id == Document.id)
+        topics_count: int = 0
+        if req.topic_ids:
+            topics_count = len(
+                resolve_topic_ids_with_descendants(
+                    self.db,
+                    req.topic_ids,
+                    include_sub_topics=req.include_sub_topics,
+                )
+            )
+        elif apply_topic_filter:
+            topics_count = len([t for t in clean_topics if t != QUIZ_CATALOG_FULL_TEXT_STRAND])
+        else:
+            topics_count = (
+                self.db.query(func.count(func.distinct(Chunk.topic_title)))
+                .join(Document, Chunk.document_id == Document.id)
+                .filter(
+                    Document.pack_id.in_(matched_pack_ids),
+                    Document.status == DocumentStatus.PUBLISHED.value,
+                    Document.tenant_id == tenant_id,
+                    Chunk.topic_title.isnot(None),
+                    Chunk.topic_title != "",
+                    *count_filters,
+                )
+                .scalar()
+                or 0
+            )
+
+        per_document: List[PerDocumentScopePreview] = []
+        doc_rows = (
+            self.db.query(
+                Document.id,
+                func.coalesce(Document.title, Document.filename),
+                func.count(Chunk.id),
+            )
+            .join(Chunk, Chunk.document_id == Document.id)
             .filter(
                 Document.pack_id.in_(matched_pack_ids),
                 Document.status == DocumentStatus.PUBLISHED.value,
                 Document.tenant_id == tenant_id,
-                Chunk.topic_title.isnot(None),
-                Chunk.topic_title != "",
                 *count_filters,
             )
-            .scalar()
-            or 0
+            .group_by(Document.id, Document.title, Document.filename)
+            .all()
         )
+        for doc_id, doc_title, chunk_count in doc_rows:
+            topics_matched = 0
+            if req.topic_ids:
+                resolved = resolve_topic_ids_with_descendants(
+                    self.db, req.topic_ids, include_sub_topics=req.include_sub_topics
+                )
+                topics_matched = (
+                    self.db.query(func.count(func.distinct(Chunk.topic_fk)))
+                    .filter(
+                        Chunk.document_id == doc_id,
+                        Chunk.topic_fk.in_(resolved),
+                        *([func.lower(Chunk.text).ilike(f"%{req.refinement.strip().lower()}%")]
+                          if req.refinement and req.refinement.strip() else []),
+                    )
+                    .scalar()
+                    or 0
+                )
+            per_document.append(
+                PerDocumentScopePreview(
+                    document_id=doc_id,
+                    document_title=doc_title,
+                    chunk_count=int(chunk_count),
+                    topics_matched=int(topics_matched),
+                )
+            )
 
         logger.info(
             "quiz_catalog_scope_preview",
@@ -494,4 +658,5 @@ class QuizCatalogService:
             topics_count=topics_count,
             estimated_segments=estimated_segments,
             matched_pack_ids=matched_pack_ids,
+            per_document=per_document,
         )

@@ -11,6 +11,8 @@ class Settings(BaseSettings):
 
     # Database
     DATABASE_URL: str = "postgresql://user:password@localhost:5432/1ne_db"
+    # Optional direct URL for Alembic DDL (required when DATABASE_URL uses Supabase pooler :6543)
+    DATABASE_MIGRATION_URL: Optional[str] = None
 
     # Environment
     ENVIRONMENT: str = "dev"  # dev, staging, prod
@@ -165,6 +167,8 @@ class Settings(BaseSettings):
     WORKSHEET_GENERATION_TIMEOUT_SECONDS: float = 180.0
     # Quiz generation: hard cap for Teacher Tools quiz generation (seconds)
     QUIZ_GENERATION_TIMEOUT_SECONDS: float = 180.0
+    # When True, quiz retrieval filters by document_topics.id (topic_fk) instead of ILIKE strings
+    SCOPE_BY_TOPIC_ID_ENABLED: bool = True
     # When False: skip cache lookup and cache write (no worksheet_cache DB dependency)
     WORKSHEET_CACHE_ENABLED: bool = False
     # Max repair attempts for difficulty validation before downgrade or best-effort return
