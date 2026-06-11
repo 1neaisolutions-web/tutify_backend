@@ -807,6 +807,28 @@ class IngestionService:
                         "pdf_outline_toc_applied",
                         extra={"document_id": str(document_id), "entries": len(auto_map)},
                     )
+
+            if document.chapter_map and getattr(settings, "AUTO_EXTRACT_SECTION_TOC", True):
+                has_level2 = any(int(e.get("level") or 1) > 1 for e in document.chapter_map)
+                if not has_level2:
+                    pages_for_sections = [(p.page_no, p.text or "") for p in normalized_pages]
+                    from app.domains.content_ingestion.section_heading_extractor import (
+                        merge_sections_into_chapter_map,
+                    )
+                    enriched = merge_sections_into_chapter_map(
+                        list(document.chapter_map), pages_for_sections
+                    )
+                    sections_added = len(enriched) - len(document.chapter_map)
+                    if sections_added > 0:
+                        document.chapter_map = enriched
+                        meta_sec = dict(document.processing_metadata or {})
+                        meta_sec["sections_auto_extracted"] = sections_added
+                        document.processing_metadata = meta_sec
+                        self.db.commit()
+                        logger.info(
+                            "auto_sections_extracted",
+                            extra={"document_id": str(document_id), "sections_added": sections_added},
+                        )
             
             # Step 4: Chunking (adaptive profiles for OCR vs digital)
             t0 = time.perf_counter()
@@ -1008,6 +1030,13 @@ class IngestionService:
                     meta_tv = dict(document.processing_metadata or {})
                     meta_tv["topic_validation_warnings"] = validation_warnings
                     document.processing_metadata = meta_tv
+                    threshold = float(getattr(settings, "TOPIC_COVERAGE_WARNING_THRESHOLD", 0.95))
+                    if topic_report.coverage < threshold:
+                        document.status = DocumentStatus.WARNING.value
+                        meta_tv["topic_coverage_warning"] = (
+                            f"Topic coverage {topic_report.coverage:.1%} below threshold {threshold:.0%}."
+                        )
+                        document.processing_metadata = meta_tv
                     logger.warning(
                         "topic_validation_warnings",
                         extra={"document_id": str(document_id), "warnings": validation_warnings},

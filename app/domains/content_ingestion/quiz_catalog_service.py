@@ -15,6 +15,7 @@ from sqlalchemy.sql import ColumnElement
 from app.core.logging import get_logger
 from app.domains.content_ingestion.enums import DocumentStatus
 from app.domains.content_ingestion.document_topics_service import resolve_topic_ids_with_descendants
+from app.domains.content_ingestion.scope_query import build_scope_chunk_filters, count_scoped_chunks
 from app.domains.content_ingestion.models import Chunk, ContentPack, Document, DocumentTopic
 from app.domains.content_ingestion.quiz_catalog_schemas import (
     CatalogBookCard,
@@ -375,9 +376,16 @@ class QuizCatalogService:
         )
         return TopicsResponse(topics=topics, pack_count=len(valid_pack_ids))
 
-    def _build_topic_tree(self, topics: List[DocumentTopic]) -> List[TopicNode]:
+    def _build_topic_tree(
+        self,
+        topics: List[DocumentTopic],
+        *,
+        exclude_fallback_topics: bool = True,
+    ) -> List[TopicNode]:
         """Build hierarchical TopicNode list from flat DocumentTopic rows."""
         visible = [t for t in topics if t.chunk_count > 0]
+        if exclude_fallback_topics:
+            visible = [t for t in visible if not t.topic_key.startswith("scope:pages")]
         by_key = {t.topic_key: t for t in visible}
         children_map: dict[str, list[DocumentTopic]] = {}
         roots: list[DocumentTopic] = []
@@ -407,6 +415,8 @@ class QuizCatalogService:
         self,
         tenant_id: UUID,
         pack_ids: List[UUID],
+        *,
+        exclude_fallback_topics: bool = True,
     ) -> CatalogStructureResponse:
         """Return per-pack hierarchical document topic trees with stable UUIDs."""
         if not pack_ids:
@@ -459,7 +469,9 @@ class QuizCatalogService:
                         document_id=doc.id,
                         document_title=doc.title or doc.filename,
                         total_chunks=total_chunks,
-                        topic_tree=self._build_topic_tree(topics),
+                        topic_tree=self._build_topic_tree(
+                            topics, exclude_fallback_topics=exclude_fallback_topics
+                        ),
                         has_page_bin_fallbacks=has_fallbacks,
                     )
                 )
@@ -474,26 +486,6 @@ class QuizCatalogService:
             )
 
         return CatalogStructureResponse(packs=pack_structures)
-
-    def _scope_chunk_filters(
-        self,
-        tenant_id: UUID,
-        matched_pack_ids: List[UUID],
-        req: ScopePreviewRequest,
-    ) -> Tuple[List[ColumnElement], bool]:
-        """Return SQLAlchemy filter clauses and whether topic filter is active."""
-        clean_topics = [t.strip() for t in req.topics if t and t.strip()]
-        if req.topic_ids:
-            resolved = resolve_topic_ids_with_descendants(
-                self.db,
-                req.topic_ids,
-                include_sub_topics=req.include_sub_topics,
-            )
-            if resolved:
-                return [Chunk.topic_fk.in_(resolved)], True
-        if _topic_strings_apply_chunk_filter(clean_topics):
-            return [_chunks_match_topic_strings_clause(clean_topics)], True
-        return [], False
 
     def get_scope_preview(
         self,
@@ -536,28 +528,19 @@ class QuizCatalogService:
                 matched_pack_ids=[],
             )
 
-        # Base chunk query — published docs in these packs
-        count_filters, apply_topic_filter = self._scope_chunk_filters(
-            tenant_id, matched_pack_ids, req
-        )
         clean_topics = [t.strip() for t in req.topics if t and t.strip()]
 
-        if req.refinement and req.refinement.strip():
-            term = f"%{req.refinement.strip().lower()}%"
-            count_filters = list(count_filters) + [func.lower(Chunk.text).ilike(term)]
-
-        estimated_segments: int = (
-            self.db.query(func.count(Chunk.id))
-            .join(Document, Chunk.document_id == Document.id)
-            .filter(
-                Document.pack_id.in_(matched_pack_ids),
-                Document.status == DocumentStatus.PUBLISHED.value,
-                Document.tenant_id == tenant_id,
-                *count_filters,
-            )
-            .scalar()
-            or 0
+        estimated_segments, scope = count_scoped_chunks(
+            self.db,
+            tenant_id=tenant_id,
+            pack_ids=matched_pack_ids,
+            topic_ids=req.topic_ids or None,
+            topic_strings=clean_topics if not req.topic_ids else None,
+            include_sub_topics=req.include_sub_topics,
+            refinement=req.refinement,
         )
+        apply_topic_filter = scope.applied_topic_filter
+        count_filters = list(scope.filters)
 
         sources_count: int = (
             self.db.query(func.count(func.distinct(Document.id)))

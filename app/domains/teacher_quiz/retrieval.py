@@ -4,17 +4,15 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.domains.content_ingestion.enums import DocumentStatus
-from app.domains.content_ingestion.models import Chunk, ContentPack, Document, DocumentTopic
-from app.domains.content_ingestion.quiz_catalog_service import (
-    QUIZ_CATALOG_FULL_TEXT_STRAND,
-    _topic_strings_apply_chunk_filter,
+from app.domains.content_ingestion.models import ContentPack, DocumentTopic
+from app.domains.content_ingestion.scope_query import (
+    count_scoped_chunks_diagnostics,
+    fetch_scoped_chunks,
 )
-from app.domains.content_ingestion.topic_scope import RetrievalScopeError, expand_scope_topic_ids
+from app.domains.content_ingestion.topic_scope import RetrievalScopeError
 
 
 @dataclass(frozen=True)
@@ -23,6 +21,7 @@ class RetrievalResult:
     citations: List[Dict[str, str]]
     warnings: List[str]
     metadata: Dict[str, Any]
+    chunk_texts: Dict[str, str]
 
 
 def _page_range(meta: Dict[str, Any]) -> str:
@@ -35,22 +34,6 @@ def _page_range(meta: Dict[str, Any]) -> str:
     if end is not None:
         return str(end)
     return ""
-
-
-def _safe_topic_filter_clause(topics: List[str]):
-    clean = [t.strip() for t in topics if t and t.strip()]
-    if not _topic_strings_apply_chunk_filter(clean):
-        return None
-    clauses = []
-    for t in clean:
-        if t == QUIZ_CATALOG_FULL_TEXT_STRAND:
-            continue
-        clauses.append(Chunk.topic_title.ilike(f"%{t}%"))
-        clauses.append(func.coalesce(Document.title, "") == t)
-        clauses.append(Document.filename == t)
-    if not clauses:
-        return None
-    return or_(*clauses)
 
 
 class QuizRetrievalService:
@@ -84,6 +67,7 @@ class QuizRetrievalService:
         max_chunks: int = 18,
         include_sub_topics: bool = True,
         generate_without_sources: bool = False,
+        seed: Optional[str] = None,
     ) -> RetrievalResult:
         warnings: List[str] = []
         meta: Dict[str, Any] = {}
@@ -95,74 +79,59 @@ class QuizRetrievalService:
                 citations=[],
                 warnings=["No accessible packs found for this tenant."],
                 metadata={"pack_ids": [], "applied_topic_filter": False},
+                chunk_texts={},
             )
 
-        base_q = (
-            self.db.query(Chunk, Document, ContentPack)
-            .join(Document, Chunk.document_id == Document.id)
-            .join(ContentPack, Document.pack_id == ContentPack.id)
-            .filter(
-                Document.pack_id.in_(valid_pack_ids),
-                Document.tenant_id == tenant_id,
-                Document.status == DocumentStatus.PUBLISHED.value,
-            )
-        )
-
-        applied_topic = False
-        q = base_q
-        resolved_ids: List[UUID] = []
-
+        strict = bool(getattr(settings, "QUIZ_STRICT_SCOPE_ONLY", True))
         use_topic_ids = bool(
             scope_topic_ids
-            and settings.SCOPE_BY_TOPIC_ID_ENABLED
+            and (settings.SCOPE_BY_TOPIC_ID_ENABLED or strict)
         )
-        if use_topic_ids:
-            resolved_ids = expand_scope_topic_ids(
-                self.db, scope_topic_ids or [], include_sub_topics=include_sub_topics
-            )
-            if resolved_ids:
-                applied_topic = True
-                q = q.filter(Chunk.topic_fk.in_(resolved_ids))
-        else:
-            clause = _safe_topic_filter_clause(topics)
-            if clause is not None:
-                applied_topic = True
-                q = q.filter(clause)
 
-        use_semantic = (
-            refinement
-            and refinement.strip()
-            and settings.EMBEDDING_PROVIDER != "fake"
-        )
-        if refinement and refinement.strip() and not use_semantic:
-            term = f"%{refinement.strip().lower()}%"
-            q = q.filter(func.lower(Chunk.text).ilike(term))
+        if strict and not generate_without_sources and not scope_topic_ids:
+            raise RetrievalScopeError(
+                "Select at least one chapter or topic before generating.",
+                topic_ids=[],
+                fallback_available=False,
+            )
+
+        if refinement and refinement.strip() and settings.EMBEDDING_PROVIDER == "fake":
             warnings.append("Semantic search unavailable; using text search instead.")
 
-        rows = (
-            q.order_by(Chunk.page_start_pdf.asc().nulls_last(), Chunk.created_at.asc().nulls_last())
-            .limit(max_chunks)
-            .all()
+        if use_topic_ids and scope_topic_ids and getattr(settings, "SCOPE_PAGE_RANGE_GUARD_ENABLED", False):
+            meta.update(
+                count_scoped_chunks_diagnostics(
+                    self.db,
+                    tenant_id=tenant_id,
+                    pack_ids=valid_pack_ids,
+                    topic_ids=scope_topic_ids,
+                    include_sub_topics=include_sub_topics,
+                    refinement=refinement,
+                )
+            )
+
+        rows, scope = fetch_scoped_chunks(
+            self.db,
+            tenant_id=tenant_id,
+            pack_ids=valid_pack_ids,
+            topic_ids=scope_topic_ids if use_topic_ids else None,
+            topic_strings=topics if not use_topic_ids and not strict else None,
+            include_sub_topics=include_sub_topics,
+            refinement=refinement,
+            limit=max_chunks,
+            stratified=True,
+            seed=seed,
         )
 
+        applied_topic = scope.applied_topic_filter
+        resolved_ids = scope.resolved_topic_ids
+
         if not rows and applied_topic:
-            if use_topic_ids and settings.SCOPE_BY_TOPIC_ID_ENABLED:
-                raise RetrievalScopeError(
-                    "No content found for selected chapters. The book may need re-processing.",
-                    topic_ids=scope_topic_ids or [],
-                    fallback_available=generate_without_sources,
-                )
-            if not use_topic_ids:
-                warnings.append("Topic filter returned no chunks; widening to full pack scope.")
-                rows = (
-                    base_q.order_by(
-                        Chunk.page_start_pdf.asc().nulls_last(),
-                        Chunk.created_at.asc().nulls_last(),
-                    )
-                    .limit(max_chunks)
-                    .all()
-                )
-                applied_topic = False
+            raise RetrievalScopeError(
+                "No content found for selected chapters. The book may need re-processing.",
+                topic_ids=scope_topic_ids or [],
+                fallback_available=generate_without_sources,
+            )
 
         topic_titles: Dict[UUID, str] = {}
         if rows and any(r[0].topic_fk for r in rows):
@@ -173,8 +142,12 @@ class QuizRetrievalService:
         citations: List[Dict[str, str]] = []
         context_parts: List[str] = []
         current_doc_header: Optional[str] = None
+        chunk_ids: List[str] = []
+        chunk_texts: Dict[str, str] = {}
 
         for chunk, doc, pack in rows:
+            chunk_ids.append(str(chunk.id))
+            chunk_texts[str(chunk.id)] = chunk.text or ""
             topic_label = topic_titles.get(chunk.topic_fk, chunk.topic_title or "")
             doc_header = f"=== {doc.title or doc.filename} (Pack: {pack.name}) ==="
             if doc_header != current_doc_header:
@@ -183,7 +156,9 @@ class QuizRetrievalService:
 
             page_lo = chunk.page_start_pdf or "?"
             page_hi = chunk.page_end_pdf or page_lo
-            section_header = f"--- Chapter: {topic_label} | Pages {page_lo}–{page_hi} ---"
+            section_header = (
+                f"--- [chunk_id={chunk.id}] Chapter: {topic_label} | Pages {page_lo}–{page_hi} ---"
+            )
             context_parts.append(section_header + "\n" + (chunk.text or ""))
 
             citations.append(
@@ -193,6 +168,7 @@ class QuizRetrievalService:
                     "pack_id": str(doc.pack_id),
                     "document_title": doc.title or doc.filename,
                     "topic_title": topic_label,
+                    "topic_id": str(chunk.topic_fk) if chunk.topic_fk else "",
                     "page_range": _page_range(
                         {
                             "page_start_pdf": chunk.page_start_pdf,
@@ -207,9 +183,12 @@ class QuizRetrievalService:
                 "pack_ids": [str(x) for x in valid_pack_ids],
                 "applied_topic_filter": applied_topic,
                 "topic_count": len(resolved_ids) if use_topic_ids else len([t for t in topics if t and t.strip()]),
+                "topic_ids": [str(x) for x in resolved_ids],
+                "chunk_ids": chunk_ids,
                 "chunk_count": len(rows),
                 "refinement": refinement or "",
-                "scope_mode": "topic_fk" if use_topic_ids else "legacy_string",
+                "scope_mode": scope.scope_mode,
+                "include_sub_topics": include_sub_topics,
             }
         )
 
@@ -218,4 +197,5 @@ class QuizRetrievalService:
             citations=citations,
             warnings=warnings,
             metadata=meta,
+            chunk_texts=chunk_texts,
         )

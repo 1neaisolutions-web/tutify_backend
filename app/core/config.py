@@ -169,6 +169,21 @@ class Settings(BaseSettings):
     QUIZ_GENERATION_TIMEOUT_SECONDS: float = 180.0
     # When True, quiz retrieval filters by document_topics.id (topic_fk) instead of ILIKE strings
     SCOPE_BY_TOPIC_ID_ENABLED: bool = True
+    # When True, require scope_topic_ids and never widen scope on zero matches
+    QUIZ_STRICT_SCOPE_ONLY: bool = True
+    # Quiz retrieval chunk budget
+    QUIZ_MAX_CHUNKS_PER_QUESTION: int = 3
+    QUIZ_MAX_CHUNKS_CAP: int = 30
+    # Minimum context characters per question when sources enabled
+    QUIZ_MIN_CONTEXT_CHARS_PER_QUESTION: int = 200
+    # Chunk topic assignment: disable nearest-chapter fallback when False
+    CHUNK_NEAREST_CHAPTER_FALLBACK: bool = False
+    # When True, scope queries also require chunk pages to overlap topic page ranges
+    SCOPE_PAGE_RANGE_GUARD_ENABLED: bool = True
+    # Auto-extract level-2 section headings (N.M pattern) into chapter_map at ingest/rechunk
+    AUTO_EXTRACT_SECTION_TOC: bool = True
+    # Document topic coverage below this triggers WARNING status (0.0–1.0)
+    TOPIC_COVERAGE_WARNING_THRESHOLD: float = 0.95
     # When False: skip cache lookup and cache write (no worksheet_cache DB dependency)
     WORKSHEET_CACHE_ENABLED: bool = False
     # Max repair attempts for difficulty validation before downgrade or best-effort return

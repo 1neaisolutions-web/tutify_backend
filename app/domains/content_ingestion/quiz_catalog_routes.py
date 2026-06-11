@@ -113,7 +113,7 @@ def list_catalog(
 
 
 # ---------------------------------------------------------------------------
-# POST /api/v1/quiz/catalog/topics
+# POST /api/v1/quiz/catalog/topics  (DEPRECATED — use POST /catalog/structure)
 # ---------------------------------------------------------------------------
 
 @router.post(

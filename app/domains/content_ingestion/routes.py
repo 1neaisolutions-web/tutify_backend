@@ -315,6 +315,13 @@ async def upload_document_with_stream(
                 except json.JSONDecodeError:
                     yield f"data: {json.dumps({'type': 'error', 'message': 'Invalid chapter_map JSON'})}\n\n"
                     return
+                if isinstance(chapter_map_data, list):
+                    from app.domains.content_ingestion.chapter_map_validator import validate_chapter_map
+
+                    validation = validate_chapter_map(chapter_map_data)
+                    if not validation.ok:
+                        yield f"data: {json.dumps({'type': 'error', 'message': 'Invalid chapter_map', 'errors': validation.errors})}\n\n"
+                        return
             
             document_service = DocumentService(db)
             document = document_service.create_document(
@@ -453,6 +460,15 @@ async def upload_document(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid chapter_map JSON"
             )
+        if isinstance(chapter_map_data, list):
+            from app.domains.content_ingestion.chapter_map_validator import validate_chapter_map
+
+            validation = validate_chapter_map(chapter_map_data)
+            if not validation.ok:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={"message": "Invalid chapter_map", "errors": validation.errors},
+                )
     
     # Create document record
     service = DocumentService(db)
@@ -824,6 +840,31 @@ async def reprocess_document_topics(
     }
 
 
+@router.post("/admin/documents/{document_id}/rechunk-from-pages")
+async def rechunk_document_from_pages(
+    document_id: UUID,
+    current_user: User = Depends(require_any_role("super_admin", "org_admin")),
+    db: Session = Depends(get_db),
+):
+    """Re-chunk from stored page_texts, auto-extract sections, re-embed, rebuild topics."""
+    service = DocumentService(db)
+    document = service.get_document(document_id, current_user.tenant_id)
+    if not document:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+
+    from app.domains.content_ingestion.services.rechunk_service import RechunkService
+
+    rechunk = RechunkService(db)
+    report = await rechunk.rechunk_document(document_id)
+    if report.errors:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"errors": report.errors, **report.to_dict()},
+        )
+    db.refresh(document)
+    return report.to_dict()
+
+
 @router.get("/admin/documents/health-summary")
 async def document_topics_health_summary(
     current_user: User = Depends(require_any_role("super_admin")),
@@ -836,7 +877,9 @@ async def document_topics_health_summary(
         text(
             """
             SELECT document_id, filename, status, total_topics, empty_topics,
-                   fallback_topics, total_chunks, chapter_coverage_pct
+                   fallback_topics, total_chunks, section_count,
+                   mislabeled_chunk_count, chapters_without_sections,
+                   chapter_coverage_pct
             FROM document_topics_health
             WHERE tenant_id = :tenant_id
             ORDER BY chapter_coverage_pct ASC NULLS FIRST

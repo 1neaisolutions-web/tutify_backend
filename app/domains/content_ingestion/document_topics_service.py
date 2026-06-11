@@ -81,9 +81,13 @@ def populate_document_topics(
     chapter_map: List[Dict[str, Any]] = list(document.chapter_map or [])
     id_to_key: Dict[str, str] = {}
     key_to_row: Dict[str, DocumentTopic] = {}
+    seen_topic_keys: Set[str] = set()
 
     for i, entry in enumerate(chapter_map):
         topic_key = str(entry.get("id") or entry.get("topic_key") or f"ch-{i + 1}")
+        if topic_key in seen_topic_keys:
+            continue
+        seen_topic_keys.add(topic_key)
         id_to_key[str(entry.get("id") or topic_key)] = topic_key
         start_page, end_page = _page_range(entry)
         row = DocumentTopic(
@@ -187,6 +191,12 @@ def populate_document_topics(
             row.start_page_pdf = row.start_page_pdf or page_lo[row.id]
         if row.id in page_hi:
             row.end_page_pdf = row.end_page_pdf or page_hi[row.id]
+
+    for row in sorted(key_to_row.values(), key=lambda r: -(r.level or 1)):
+        if row.parent_key and row.parent_key in key_to_row:
+            key_to_row[row.parent_key].chunk_count += row.chunk_count
+
+    for row in key_to_row.values():
         if row.chunk_count == 0 and not row.topic_key.startswith("scope:pages"):
             empty_chapters.append(row.display_title)
 
