@@ -9,6 +9,7 @@ from app.domains.external_context.metadata_data import (
     SUBJECTS,
     CURRICULUM_FRAMEWORKS,
     GRADE_BANDS,
+    US_GRADES,
     SCHOOL_TYPES,
     LANGUAGES,
     YEARS_EXPERIENCE,
@@ -46,6 +47,12 @@ async def get_curriculums():
 async def get_grade_bands():
     """Return grade band options."""
     return GRADE_BANDS
+
+
+@router.get("/metadata/grades")
+async def get_grades():
+    """Return US K-12 individual grade options (Kindergarten, Grade 1–12)."""
+    return US_GRADES
 
 
 @router.get("/metadata/school-types")
