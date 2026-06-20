@@ -86,6 +86,7 @@ def _to_exam_response(e: TeacherExam) -> ExamApiResponse:
         sectionTargetCount=int(e.section_target_count or 4),
         sourceBookIds=[str(x) for x in (e.source_pack_ids or [])],
         scopeTopics=list(e.scope_topics or []),
+        scopeTopicIds=[str(x) for x in (e.scope_topic_ids or [])],
         scopeRefinement=e.scope_refinement,
         sourceSummary=_source_summary(e),
         generateWithoutSources=bool(e.generate_without_sources),
@@ -138,7 +139,10 @@ def _to_exam_response(e: TeacherExam) -> ExamApiResponse:
 
 
 def _raise_domain_error(e: ExamError) -> None:
-    raise HTTPException(status_code=e.http_status, detail={"code": e.code, "message": e.message})
+    detail: dict = {"code": e.code, "message": e.message}
+    if e.extra:
+        detail.update(e.extra)
+    raise HTTPException(status_code=e.http_status, detail=detail)
 
 
 @router.get("/", response_model=ExamListResponse)

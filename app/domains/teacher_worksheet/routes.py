@@ -96,6 +96,7 @@ def _to_worksheet_response(ws: TeacherWorksheet) -> WorksheetApiResponse:
         topic=_topic_for_response(ws),
         sourceBookIds=[str(x) for x in (ws.source_pack_ids or [])],
         scopeTopics=list(ws.scope_topics or []),
+        scopeTopicIds=[str(x) for x in (ws.scope_topic_ids or [])],
         scopeRefinement=ws.scope_refinement,
         sourceSummary=_source_summary(ws),
         difficulty=ws.difficulty,
@@ -109,7 +110,10 @@ def _to_worksheet_response(ws: TeacherWorksheet) -> WorksheetApiResponse:
 
 
 def _raise_domain_error(e: WorksheetError) -> None:
-    raise HTTPException(status_code=e.http_status, detail={"code": e.code, "message": e.message})
+    detail: dict = {"code": e.code, "message": e.message}
+    if e.extra:
+        detail.update(e.extra)
+    raise HTTPException(status_code=e.http_status, detail=detail)
 
 
 @router.get("/worksheets", response_model=WorksheetListResponse)

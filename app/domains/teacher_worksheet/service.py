@@ -10,6 +10,12 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.domains.auth.models import User
+from app.domains.content_ingestion.teacher_scope_validation import (
+    SourcedScopeValidationError,
+    parse_scope_topic_ids,
+    validate_sourced_scope,
+)
+from app.domains.content_ingestion.topic_scope import RetrievalScopeError
 from app.domains.teacher_worksheet.errors import (
     generation_failed,
     generation_timeout,
@@ -17,6 +23,7 @@ from app.domains.teacher_worksheet.errors import (
     min_block,
     min_session,
     not_found,
+    retrieval_scope_failed,
     validation_failed,
 )
 from app.domains.teacher_worksheet.generation import GeneratedBlock, WorksheetGenerationService
@@ -124,6 +131,50 @@ def _worksheet_existing_signatures(ws: TeacherWorksheet) -> List[str]:
     return out
 
 
+def _worksheet_retrieval(
+    service: "TeacherWorksheetService",
+    *,
+    worksheet: TeacherWorksheet,
+    tenant_id: UUID,
+    max_chunks: int,
+) -> Tuple[str, list, List[str], Dict[str, Any]]:
+    if worksheet.generate_without_sources:
+        return "", [], [], {}
+    try:
+        validate_sourced_scope(
+            service.db,
+            tenant_id=tenant_id,
+            generate_without_sources=False,
+            source_pack_ids=list(worksheet.source_pack_ids or []),
+            scope_topic_ids=list(worksheet.scope_topic_ids or []),
+        )
+    except SourcedScopeValidationError as e:
+        raise validation_failed(e.message) from e
+    try:
+        pack_ids = [UUID(x) for x in (worksheet.source_pack_ids or []) if x]
+    except Exception:
+        raise validation_failed("Invalid pack IDs on worksheet.")
+    scope_ids = parse_scope_topic_ids(worksheet.scope_topic_ids)
+    try:
+        rr = service.retrieval.retrieve(
+            tenant_id=tenant_id,
+            pack_ids=pack_ids,
+            topics=list(worksheet.scope_topics or []),
+            scope_topic_ids=scope_ids,
+            refinement=worksheet.scope_refinement,
+            max_chunks=max_chunks,
+            generate_without_sources=False,
+            seed=str(worksheet.id),
+        )
+    except RetrievalScopeError as e:
+        raise retrieval_scope_failed(
+            e.message,
+            topic_ids=e.topic_ids,
+            fallback_available=e.fallback_available,
+        ) from e
+    return rr.context_text, rr.citations, list(rr.warnings), dict(rr.metadata or {})
+
+
 class TeacherWorksheetService:
     def __init__(self, db: Session):
         self.db = db
@@ -149,6 +200,16 @@ class TeacherWorksheetService:
         return ws
 
     def create_worksheet(self, *, current_user: User, payload: Dict[str, Any]) -> TeacherWorksheet:
+        try:
+            validate_sourced_scope(
+                self.db,
+                tenant_id=current_user.tenant_id,
+                generate_without_sources=bool(payload.get("generateWithoutSources") or False),
+                source_pack_ids=list(payload.get("sourceBookIds") or []),
+                scope_topic_ids=list(payload.get("scopeTopicIds") or []),
+            )
+        except SourcedScopeValidationError as e:
+            raise validation_failed(e.message) from e
         now = datetime.now(timezone.utc)
         ws = TeacherWorksheet(
             id=uuid4(),
@@ -166,6 +227,7 @@ class TeacherWorksheetService:
             due_at=payload.get("dueAt"),
             source_pack_ids=list(payload.get("sourceBookIds") or []),
             scope_topics=list(payload.get("scopeTopics") or []),
+            scope_topic_ids=list(payload.get("scopeTopicIds") or []),
             scope_refinement=payload.get("scopeRefinement"),
             topic_summary=_topic_summary(list(payload.get("scopeTopics") or []), payload.get("scopeRefinement")),
             generate_without_sources=bool(payload.get("generateWithoutSources") or False),
@@ -198,6 +260,7 @@ class TeacherWorksheetService:
             ("dueAt", "due_at"),
             ("sourceBookIds", "source_pack_ids"),
             ("scopeTopics", "scope_topics"),
+            ("scopeTopicIds", "scope_topic_ids"),
             ("scopeRefinement", "scope_refinement"),
             ("generateWithoutSources", "generate_without_sources"),
             ("difficulty", "difficulty"),
@@ -206,8 +269,23 @@ class TeacherWorksheetService:
         for key, attr in mapping:
             if key in patch and patch[key] is not None:
                 setattr(ws, attr, patch[key])
-        if "scopeTopics" in patch or "scopeRefinement" in patch:
+        if "scopeTopics" in patch or "scopeRefinement" in patch or "scopeTopicIds" in patch:
             ws.topic_summary = _topic_summary(list(ws.scope_topics or []), ws.scope_refinement)
+
+        if not ws.generate_without_sources and (
+            "scopeTopicIds" in patch or "scopeTopics" in patch or "sourceBookIds" in patch
+        ):
+            try:
+                validate_sourced_scope(
+                    self.db,
+                    tenant_id=current_user.tenant_id,
+                    generate_without_sources=False,
+                    source_pack_ids=list(ws.source_pack_ids or []),
+                    scope_topic_ids=list(ws.scope_topic_ids or []),
+                )
+            except SourcedScopeValidationError as e:
+                raise validation_failed(e.message) from e
+
         ws.updated_at = datetime.now(timezone.utc)
         return self.repo.update_worksheet(ws)
 
@@ -396,19 +474,12 @@ class TeacherWorksheetService:
 
         context_text = ""
         if not ws.generate_without_sources:
-            try:
-                pack_ids = [UUID(x) for x in (ws.source_pack_ids or []) if x]
-            except Exception:
-                raise validation_failed("Invalid pack IDs on worksheet.")
-            if pack_ids:
-                rr = self.retrieval.retrieve(
-                    tenant_id=current_user.tenant_id,
-                    pack_ids=pack_ids,
-                    topics=list(ws.scope_topics or []),
-                    refinement=ws.scope_refinement,
-                    max_chunks=8,
-                )
-                context_text = rr.context_text
+            context_text, _, _, _ = _worksheet_retrieval(
+                self,
+                worksheet=ws,
+                tenant_id=current_user.tenant_id,
+                max_chunks=8,
+            )
 
         avoid = _worksheet_existing_signatures(ws)
 
@@ -478,21 +549,12 @@ class TeacherWorksheetService:
         retrieval_meta: Dict[str, Any] = {}
 
         if not ws.generate_without_sources:
-            try:
-                pack_ids = [UUID(x) for x in (ws.source_pack_ids or []) if x]
-            except Exception:
-                raise validation_failed("Invalid pack IDs on worksheet.")
-            rr = self.retrieval.retrieve(
+            context_text, citations, retrieval_warnings, retrieval_meta = _worksheet_retrieval(
+                self,
+                worksheet=ws,
                 tenant_id=current_user.tenant_id,
-                pack_ids=pack_ids,
-                topics=list(ws.scope_topics or []),
-                refinement=ws.scope_refinement,
                 max_chunks=18,
             )
-            context_text = rr.context_text
-            citations = rr.citations
-            retrieval_warnings.extend(rr.warnings)
-            retrieval_meta = rr.metadata
         else:
             retrieval_warnings.append("Generation without sources (grounding off).")
 

@@ -84,6 +84,7 @@ class ExamApiResponse(BaseModel):
     sectionTargetCount: int
     sourceBookIds: List[str]
     scopeTopics: List[str]
+    scopeTopicIds: List[str] = Field(default_factory=list)
     scopeRefinement: Optional[str] = None
     sourceSummary: Optional[str] = None
     generateWithoutSources: bool
@@ -121,6 +122,7 @@ class ExamCreateRequest(BaseModel):
     sectionTargetCount: int = Field(default=4, ge=1, le=12)
     sourceBookIds: List[str] = Field(default_factory=list)
     scopeTopics: List[str] = Field(default_factory=list)
+    scopeTopicIds: List[str] = Field(default_factory=list)
     scopeRefinement: Optional[str] = None
     generateWithoutSources: bool = False
     paper: ExamPaperConfigSchema = Field(default_factory=ExamPaperConfigSchema)
@@ -145,6 +147,7 @@ class ExamPatchRequest(BaseModel):
     sectionTargetCount: Optional[int] = Field(default=None, ge=1, le=12)
     sourceBookIds: Optional[List[str]] = None
     scopeTopics: Optional[List[str]] = None
+    scopeTopicIds: Optional[List[str]] = None
     scopeRefinement: Optional[str] = None
     generateWithoutSources: Optional[bool] = None
     paper: Optional[ExamPaperConfigSchema] = None

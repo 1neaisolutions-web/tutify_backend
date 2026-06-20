@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Optional
 
 
 @dataclass
@@ -8,6 +9,7 @@ class WorksheetError(Exception):
     code: str
     message: str
     http_status: int = 400
+    extra: Optional[dict] = None
 
 
 def not_found(message: str = "Worksheet not found") -> WorksheetError:
@@ -20,6 +22,23 @@ def forbidden(message: str = "Access denied") -> WorksheetError:
 
 def validation_failed(message: str) -> WorksheetError:
     return WorksheetError(code="VALIDATION_FAILED", message=message, http_status=422)
+
+
+def retrieval_scope_failed(
+    message: str,
+    *,
+    topic_ids: list,
+    fallback_available: bool = False,
+) -> WorksheetError:
+    return WorksheetError(
+        code="RETRIEVAL_SCOPE_ERROR",
+        message=message,
+        http_status=422,
+        extra={
+            "topic_ids": [str(x) for x in topic_ids],
+            "fallback_available": fallback_available,
+        },
+    )
 
 
 def min_session() -> WorksheetError:

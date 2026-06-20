@@ -58,6 +58,7 @@ class TeacherAssignment(Base):
     # RAG scope
     source_pack_ids = Column(JSONB, nullable=False, default=list)
     scope_topics = Column(JSONB, nullable=False, default=list)
+    scope_topic_ids = Column(JSONB, nullable=True)
     scope_refinement = Column(Text, nullable=True)
     topic_summary = Column(Text, nullable=True)
     generate_without_sources = Column(Boolean, nullable=False, default=False)

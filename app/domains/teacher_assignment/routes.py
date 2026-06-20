@@ -83,6 +83,7 @@ def _to_assignment_response(a: TeacherAssignment) -> AssignmentResponse:
         handoutLayout=a.handout_layout,
         sourceBookIds=[str(x) for x in (a.source_pack_ids or [])],
         scopeTopics=list(a.scope_topics or []),
+        scopeTopicIds=[str(x) for x in (a.scope_topic_ids or [])],
         scopeRefinement=a.scope_refinement,
         generateWithoutSources=bool(a.generate_without_sources),
         rigorProfile=a.rigor_profile or "Standard",
@@ -92,10 +93,10 @@ def _to_assignment_response(a: TeacherAssignment) -> AssignmentResponse:
 
 
 def _raise_domain_error(e: AssignmentError) -> None:
-    raise HTTPException(
-        status_code=e.http_status,
-        detail={"code": e.code, "message": e.message},
-    )
+    detail: dict = {"code": e.code, "message": e.message}
+    if e.extra:
+        detail.update(e.extra)
+    raise HTTPException(status_code=e.http_status, detail=detail)
 
 
 @router.get("/assignments", response_model=AssignmentListResponse)
