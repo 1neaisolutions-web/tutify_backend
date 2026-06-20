@@ -46,10 +46,21 @@ _ALLOWED_ROLES = ("teacher", "school_admin", "super_admin", "org_admin")
     summary="List available content-pack books for quiz generation",
 )
 def list_catalog(
-    subject: Optional[str] = Query(None, description="Filter by subject (case-insensitive, partial match)"),
-    grade: Optional[str] = Query(None, description="Filter by grade (case-insensitive, partial match)"),
+    subject: Optional[str] = Query(
+        None,
+        description="Filter by subject — canonical slug (math) or label (Mathematics)",
+    ),
+    grade: Optional[str] = Query(
+        None,
+        description="Filter by grade — canonical value (8) or label (Grade 8)",
+    ),
     curriculum: Optional[str] = Query(None, description="Filter by curriculum (exact match)"),
     q: Optional[str] = Query(None, description="Free-text search across name, description, subject"),
+    strict: bool = Query(True, description="When false, skip subject/grade filter (browse all)"),
+    include_near_matches: bool = Query(
+        False,
+        description="When strict filter returns no items, include same-subject other-grade packs",
+    ),
     page: int = Query(1, ge=1, description="1-indexed page number"),
     page_size: int = Query(20, ge=1, le=100, description="Items per page"),
     current_user: User = Depends(require_any_role(*_ALLOWED_ROLES)),
@@ -57,20 +68,23 @@ def list_catalog(
 ) -> CatalogListResponse:
     """
     Return a paginated list of active content packs that have at least one
-    published document.  Results are scoped to the caller's tenant.
+    published document. Results are scoped to the caller's tenant.
+    Subject and grade accept canonical slugs or display labels; matching is normalized.
     """
     params = CatalogListParams(
         subject=subject,
         grade=grade,
         curriculum=curriculum,
         q=q,
+        strict=strict,
+        include_near_matches=include_near_matches,
         page=page,
         page_size=page_size,
     )
 
     try:
         service = QuizCatalogService(db)
-        packs, total = service.get_catalog(
+        packs, total, near_packs = service.get_catalog(
             tenant_id=current_user.tenant_id,
             params=params,
         )
@@ -78,14 +92,21 @@ def list_catalog(
             service.build_catalog_card(pack, current_user.tenant_id)
             for pack in packs
         ]
+        near_items = [
+            service.build_catalog_card(pack, current_user.tenant_id)
+            for pack in near_packs
+        ]
 
         logger.info(
             "quiz_catalog_list",
             extra={
                 "tenant_id": str(current_user.tenant_id),
                 "subject": subject,
+                "grade": grade,
+                "strict": strict,
                 "q": q,
                 "total": total,
+                "near_matches": len(near_items),
                 "page": page,
                 "page_size": page_size,
             },
@@ -96,6 +117,7 @@ def list_catalog(
             page=page,
             page_size=page_size,
             items=items,
+            near_matches=near_items,
         )
 
     except HTTPException:

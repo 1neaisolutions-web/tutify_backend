@@ -28,6 +28,8 @@ from app.domains.content_ingestion.services import (
     WorksheetService,
 )
 from app.domains.content_ingestion.jobs import run_ingestion_job_sync
+from app.domains.external_context.grade_utils import grade_label, resolve_grade_value
+from app.domains.external_context.subject_utils import resolve_subject_value, subject_teacher_tools_label
 from app.domains.content_ingestion.models import Document, DocumentProcessingRun
 from app.domains.content_ingestion.enums import DocumentStatus
 from app.domains.content_ingestion.services.processing_progress_view import (
@@ -39,6 +41,24 @@ from app.domains.subscriptions.credit_errors import insufficient_credits_detail
 from app.domains.subscriptions.feature_keys import WORKSHEET_GENERATE
 
 logger = get_logger(__name__)
+
+
+def _normalize_upload_pack_subject(raw: Optional[str]) -> Optional[str]:
+    if not raw or not str(raw).strip():
+        return None
+    canonical = resolve_subject_value(raw)
+    if canonical:
+        return subject_teacher_tools_label(canonical)
+    return str(raw).strip()
+
+
+def _normalize_upload_pack_grade(raw: Optional[str]) -> Optional[str]:
+    if not raw or not str(raw).strip():
+        return None
+    canonical = resolve_grade_value(raw)
+    if canonical:
+        return grade_label(canonical)
+    return str(raw).strip()
 
 router = APIRouter(prefix="/api/v1", tags=["content-ingestion"])
 
@@ -258,9 +278,9 @@ async def upload_document_with_stream(
                 pack_data = schemas.ContentPackCreate(
                     name=pack_name,
                     description=pack_description,
-                    subject=pack_subject,
-                    grade=pack_grade,
-                    curriculum=pack_curriculum
+                    subject=_normalize_upload_pack_subject(pack_subject),
+                    grade=_normalize_upload_pack_grade(pack_grade),
+                    curriculum=pack_curriculum,
                 )
                 pack = pack_service.create_pack(
                     data=pack_data,

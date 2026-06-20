@@ -4,8 +4,207 @@ import uuid
 from app.domains.content_ingestion.document_topics_service import populate_document_topics
 from app.domains.content_ingestion.enums import DocumentStatus
 from app.domains.content_ingestion.models import Chunk, ContentPack, Document
-from app.domains.content_ingestion.quiz_catalog_schemas import ScopePreviewRequest
+from app.domains.content_ingestion.quiz_catalog_schemas import CatalogListParams, ScopePreviewRequest
 from app.domains.content_ingestion.quiz_catalog_service import QuizCatalogService
+
+
+def _seed_pack(db, *, tenant_id, name, subject, grade, publish=True):
+    """Lightweight pack + optional published document for catalog filter tests."""
+    pack = ContentPack(
+        id=uuid.uuid4(),
+        name=name,
+        subject=subject,
+        grade=grade,
+        tenant_id=tenant_id,
+        is_active=True,
+    )
+    db.add(pack)
+    if publish:
+        doc = Document(
+            id=uuid.uuid4(),
+            pack_id=pack.id,
+            filename=f"{name}.pdf",
+            file_path="dummy",
+            source_type="pdf",
+            status=DocumentStatus.PUBLISHED.value,
+            tenant_id=tenant_id,
+            title=name,
+        )
+        db.add(doc)
+    db.commit()
+    db.refresh(pack)
+    return pack
+
+
+def _seed_catalog_packs(db):
+    tenant_id = uuid.uuid4()
+    math_g8 = _seed_pack(
+        db,
+        tenant_id=tenant_id,
+        name="Heinemann Math 8",
+        subject="Mathematics",
+        grade="Grade 8",
+    )
+    math_band = _seed_pack(
+        db,
+        tenant_id=tenant_id,
+        name="Middle School Math",
+        subject="math",
+        grade="6-8",
+    )
+    physics_g9 = _seed_pack(
+        db,
+        tenant_id=tenant_id,
+        name="Physics 9",
+        subject="Physics",
+        grade="9",
+    )
+    blank_subject = _seed_pack(
+        db,
+        tenant_id=tenant_id,
+        name="Untagged Book",
+        subject=None,
+        grade="8",
+    )
+    return tenant_id, math_g8, math_band, physics_g9, blank_subject
+
+
+def test_catalog_filter_math_grade_8(db):
+    tenant_id, math_g8, math_band, physics_g9, blank_subject = _seed_catalog_packs(db)
+    service = QuizCatalogService(db)
+    items, total, near = service.get_catalog(
+        tenant_id=tenant_id,
+        params=CatalogListParams(subject="math", grade="8", strict=True),
+    )
+    ids = {p.id for p in items}
+    assert total == 2
+    assert math_g8.id in ids
+    assert math_band.id in ids
+    assert physics_g9.id not in ids
+    assert blank_subject.id not in ids
+    assert near == []
+
+
+def test_catalog_grade_band_6_8_matches_grade_8(db):
+    tenant_id, _, math_band, _, _ = _seed_catalog_packs(db)
+    service = QuizCatalogService(db)
+    items, total, _ = service.get_catalog(
+        tenant_id=tenant_id,
+        params=CatalogListParams(subject="math", grade="8"),
+    )
+    assert total >= 1
+    assert any(p.id == math_band.id for p in items)
+
+
+def test_catalog_grade_9_excludes_grade_8(db):
+    tenant_id, _, _, physics_g9, _ = _seed_catalog_packs(db)
+    service = QuizCatalogService(db)
+    items, total, _ = service.get_catalog(
+        tenant_id=tenant_id,
+        params=CatalogListParams(subject="physics", grade="8"),
+    )
+    assert physics_g9.id not in {p.id for p in items}
+
+
+def test_catalog_subject_alias_maths(db):
+    tenant_id, math_g8, _, _, _ = _seed_catalog_packs(db)
+    service = QuizCatalogService(db)
+    items, total, _ = service.get_catalog(
+        tenant_id=tenant_id,
+        params=CatalogListParams(subject="math", grade="8"),
+    )
+    assert math_g8.id in {p.id for p in items}
+    assert total >= 1
+
+
+def test_catalog_strict_false_returns_all(db):
+    tenant_id, math_g8, _, physics_g9, blank_subject = _seed_catalog_packs(db)
+    service = QuizCatalogService(db)
+    items, total, _ = service.get_catalog(
+        tenant_id=tenant_id,
+        params=CatalogListParams(subject="math", grade="8", strict=False),
+    )
+    ids = {p.id for p in items}
+    assert math_g8.id in ids
+    assert physics_g9.id in ids
+    assert blank_subject.id in ids
+    assert total == 4
+
+
+def test_catalog_upload_blank_subject_excluded_strict(db):
+    tenant_id, _, _, _, blank_subject = _seed_catalog_packs(db)
+    service = QuizCatalogService(db)
+    items, total, _ = service.get_catalog(
+        tenant_id=tenant_id,
+        params=CatalogListParams(subject="math", grade="8", strict=True),
+    )
+    assert blank_subject.id not in {p.id for p in items}
+
+
+def test_catalog_near_matches_same_subject(db):
+    tenant_id = uuid.uuid4()
+    _seed_pack(
+        db,
+        tenant_id=tenant_id,
+        name="Physics G9",
+        subject="Physics",
+        grade="9",
+    )
+    _seed_pack(
+        db,
+        tenant_id=tenant_id,
+        name="Cambridge Physics",
+        subject="Physics",
+        grade="AS & A Level",
+    )
+    service = QuizCatalogService(db)
+    items, total, near = service.get_catalog(
+        tenant_id=tenant_id,
+        params=CatalogListParams(
+            subject="physics",
+            grade="8",
+            strict=True,
+            include_near_matches=True,
+        ),
+    )
+    assert total == 0
+    assert len(near) == 2
+    assert {p.name for p in near} == {"Physics G9", "Cambridge Physics"}
+
+
+def test_catalog_cambridge_matches_physics_g11(db):
+    tenant_id = uuid.uuid4()
+    cambridge = _seed_pack(
+        db,
+        tenant_id=tenant_id,
+        name="Cambridge AS Physics",
+        subject="Physics",
+        grade="AS & A Level",
+    )
+    service = QuizCatalogService(db)
+    items, total, _ = service.get_catalog(
+        tenant_id=tenant_id,
+        params=CatalogListParams(subject="physics", grade="11", strict=True),
+    )
+    assert total == 1
+    assert items[0].id == cambridge.id
+
+
+def test_catalog_cambridge_excluded_for_grade_8(db):
+    tenant_id = uuid.uuid4()
+    _seed_pack(
+        db,
+        tenant_id=tenant_id,
+        name="Cambridge AS Physics",
+        subject="Physics",
+        grade="AS & A Level",
+    )
+    service = QuizCatalogService(db)
+    items, total, _ = service.get_catalog(
+        tenant_id=tenant_id,
+        params=CatalogListParams(subject="physics", grade="8", strict=True),
+    )
+    assert total == 0
 
 
 def _seed_pack_with_topics(db):

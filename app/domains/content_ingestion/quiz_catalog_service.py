@@ -13,6 +13,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy.sql import ColumnElement
 
 from app.core.logging import get_logger
+from app.domains.external_context.grade_utils import grade_filter_matches
+from app.domains.external_context.subject_utils import subjects_match
 from app.domains.content_ingestion.enums import DocumentStatus
 from app.domains.content_ingestion.document_topics_service import resolve_topic_ids_with_descendants
 from app.domains.content_ingestion.scope_query import build_scope_chunk_filters, count_scoped_chunks
@@ -73,6 +75,32 @@ def _is_page_range_fallback_label(label: str) -> bool:
     return bool(_PAGE_RANGE_LABEL_RE.match((label or "").strip()))
 
 
+def _pack_matches_search(pack: ContentPack, q: str) -> bool:
+    term = q.strip().lower()
+    if not term:
+        return True
+    haystacks = [
+        pack.name or "",
+        pack.description or "",
+        pack.subject or "",
+    ]
+    return any(term in h.lower() for h in haystacks)
+
+
+def _pack_matches_subject(pack: ContentPack, subject: Optional[str]) -> bool:
+    if not subject or not str(subject).strip():
+        return True
+    if not pack.subject:
+        return False
+    return subjects_match(subject, pack.subject)
+
+
+def _pack_matches_grade(pack: ContentPack, grade: Optional[str]) -> bool:
+    if not grade or not str(grade).strip():
+        return True
+    return grade_filter_matches(pack.grade, grade)
+
+
 class QuizCatalogService:
     """
     Service for the quiz catalog domain.
@@ -92,15 +120,16 @@ class QuizCatalogService:
         self,
         tenant_id: UUID,
         params: CatalogListParams,
-    ) -> Tuple[List[ContentPack], int]:
+    ) -> Tuple[List[ContentPack], int, List[ContentPack]]:
         """
         Return a paginated list of active ContentPacks that have at least one
         published Document, optionally filtered by subject / grade / curriculum
         and a free-text search term.
 
         Returns:
-            (items, total_count) — `items` are ORM objects ready for
-            `build_catalog_card`.
+            (items, total_count, near_matches) — ORM objects ready for
+            `build_catalog_card`. near_matches is populated when strict filtering
+            yields no primary matches and include_near_matches is True.
         """
         published_doc_exists = (
             self.db.query(Document)
@@ -121,31 +150,42 @@ class QuizCatalogService:
             )
         )
 
-        if params.subject:
-            query = query.filter(ContentPack.subject.ilike(f"%{params.subject}%"))
-
-        if params.grade:
-            query = query.filter(ContentPack.grade.ilike(f"%{params.grade}%"))
-
         if params.curriculum:
             query = query.filter(ContentPack.curriculum == params.curriculum)
 
-        if params.q:
-            term = f"%{params.q}%"
-            query = query.filter(
-                or_(
-                    ContentPack.name.ilike(term),
-                    ContentPack.description.ilike(term),
-                    ContentPack.subject.ilike(term),
-                )
-            )
-
         query = query.order_by(ContentPack.name.asc())
+        all_packs: List[ContentPack] = query.all()
 
-        total: int = query.count()
+        near_matches: List[ContentPack] = []
 
+        if params.strict:
+            filtered = [
+                p
+                for p in all_packs
+                if _pack_matches_subject(p, params.subject)
+                and _pack_matches_grade(p, params.grade)
+            ]
+            if (
+                params.include_near_matches
+                and not filtered
+                and params.subject
+                and str(params.subject).strip()
+            ):
+                near_matches = [
+                    p
+                    for p in all_packs
+                    if _pack_matches_subject(p, params.subject)
+                    and not _pack_matches_grade(p, params.grade)
+                ]
+        else:
+            filtered = list(all_packs)
+
+        if params.q and params.q.strip():
+            filtered = [p for p in filtered if _pack_matches_search(p, params.q)]
+
+        total: int = len(filtered)
         offset = (params.page - 1) * params.page_size
-        items: List[ContentPack] = query.offset(offset).limit(params.page_size).all()
+        items: List[ContentPack] = filtered[offset : offset + params.page_size]
 
         logger.info(
             "quiz_catalog_get_catalog",
@@ -155,13 +195,16 @@ class QuizCatalogService:
                 "grade": params.grade,
                 "curriculum": params.curriculum,
                 "q": params.q,
+                "strict": params.strict,
+                "include_near_matches": params.include_near_matches,
                 "page": params.page,
                 "page_size": params.page_size,
                 "total": total,
+                "near_matches": len(near_matches),
                 "returned": len(items),
             },
         )
-        return items, total
+        return items, total, near_matches
 
     def get_indexed_section_count(self, pack_id: UUID) -> int:
         """

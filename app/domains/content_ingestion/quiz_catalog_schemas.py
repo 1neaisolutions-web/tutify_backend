@@ -16,6 +16,8 @@ class CatalogListParams(BaseModel):
     grade: Optional[str] = None
     curriculum: Optional[str] = None
     q: Optional[str] = None  # search: name, description, subject
+    strict: bool = True
+    include_near_matches: bool = False
     page: int = Field(1, ge=1)
     page_size: int = Field(20, ge=1, le=100)
 
@@ -61,6 +63,7 @@ class CatalogListResponse(BaseModel):
     page: int
     page_size: int
     items: List[CatalogBookCard]
+    near_matches: List[CatalogBookCard] = Field(default_factory=list)
 
 
 class TopicStrand(BaseModel):
