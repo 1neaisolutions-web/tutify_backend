@@ -479,7 +479,7 @@ def complete_content(
 
 @admin_router.get("/personalization/overview", response_model=AdminPersonalizationOverviewResponse)
 def get_personalization_overview(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role("super_admin")),
     db: Session = Depends(get_db),
 ):
     from app.domains.personalization.models import (
@@ -635,7 +635,7 @@ def update_unlock_rule(
 @admin_router.post("/personalization/stale-recompute")
 def trigger_stale_recompute(
     dry_run: bool = False,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role("super_admin")),
     db: Session = Depends(get_db),
 ):
     """Detect stale profiles and enqueue recompute jobs for them."""

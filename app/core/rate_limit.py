@@ -38,3 +38,14 @@ def rate_limit_default(func):
     """Rate limit decorator for general API endpoints (10 requests per minute per IP)."""
     return limiter.limit(f"{settings.RATE_LIMIT_PER_MINUTE}/minute")(func)
 
+
+def rate_limit_admin_write(func):
+    """Rate limit decorator for admin write endpoints (10 requests per minute per user)."""
+    def _admin_key(request):
+        auth = request.headers.get("authorization", "")
+        if auth.lower().startswith("bearer "):
+            return f"admin:{auth[7:36]}"
+        return get_remote_address(request)
+
+    return limiter.limit(f"{settings.RATE_LIMIT_PER_MINUTE}/minute", key_func=_admin_key)(func)
+

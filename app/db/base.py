@@ -138,6 +138,9 @@ from app.domains.recommendation_analytics.models import (  # noqa: F401, E402
     RecommendationPerformanceSnapshot,
 )
 
+# Import admin domain models
+from app.domains.admin.models import ComplianceExportRequest  # noqa: F401, E402
+
 # Import personalization domain models
 from app.domains.personalization.models import (  # noqa: F401, E402
     UserPersonalizationProfile,

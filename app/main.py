@@ -91,6 +91,23 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Rate limiting (slowapi)
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from app.core.rate_limit import limiter
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
+@app.middleware("http")
+async def observability_middleware(request: Request, call_next):
+    """Track 5xx error rate for admin observability tile."""
+    from app.core.observability import record_response
+    response = await call_next(request)
+    record_response(response.status_code)
+    return response
+
 
 # ========== Global Exception Handlers ==========
 
