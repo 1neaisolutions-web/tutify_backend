@@ -197,9 +197,11 @@ alembic current                             # show current revision
 ## Content Ingestion Pipeline
 
 1. Upload document via `POST /api/v1/admin/documents`.
-2. Async processing: OCR (tesseract/easyocr) → chunking → embedding → pgvector storage.
-3. OCR mode: `local` (default, no external calls) or `api` (allows cloud OCR if keys present).
-4. Chunking profiles differ for digital PDFs vs scanned/OCR'd documents (configured in `.env`).
+2. Async processing: OCR (tesseract/easyocr) → chunking → **topic validation** → embedding → pgvector storage.
+3. Stable topic nodes live in `document_topics`; chunks link via `chunks.topic_fk`.
+4. Quiz catalog: `POST /api/v1/quiz/catalog/structure` returns hierarchical book → chapter → topic trees.
+5. Set `SCOPE_BY_TOPIC_ID_ENABLED=true` after migrations + backfill to enable UUID-based quiz retrieval (see root `RAG_PIPELINE_IMPROVEMENT_PLAN.md`).
+6. Admin: `POST /api/v1/admin/documents/{id}/reprocess-topics` rebuilds topic tree without re-embedding.
 
 ---
 

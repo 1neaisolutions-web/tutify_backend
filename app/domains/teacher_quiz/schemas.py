@@ -58,6 +58,8 @@ class QuizCreateRequest(BaseModel):
     # Scope
     sourceBookIds: List[str] = Field(default_factory=list)
     scopeTopics: List[str] = Field(default_factory=list)
+    scopeTopicIds: List[str] = Field(default_factory=list)
+    scopeBookIds: Optional[List[Dict[str, Any]]] = None
     scopeRefinement: Optional[str] = None
     generateWithoutSources: bool = False
 
@@ -84,6 +86,8 @@ class QuizPatchRequest(BaseModel):
 
     sourceBookIds: Optional[List[str]] = None
     scopeTopics: Optional[List[str]] = None
+    scopeTopicIds: Optional[List[str]] = None
+    scopeBookIds: Optional[List[Dict[str, Any]]] = None
     scopeRefinement: Optional[str] = None
     generateWithoutSources: Optional[bool] = None
 
@@ -128,6 +132,7 @@ class QuizResponse(BaseModel):
     topic: str
     sourceBookIds: List[str] = Field(default_factory=list)
     scopeTopics: List[str] = Field(default_factory=list)
+    scopeTopicIds: List[str] = Field(default_factory=list)
     scopeRefinement: Optional[str] = None
     sourceSummary: Optional[str] = None
 

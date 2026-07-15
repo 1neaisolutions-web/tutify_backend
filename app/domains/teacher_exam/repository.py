@@ -245,6 +245,7 @@ class TeacherExamRepository:
             section_target_count=source.section_target_count,
             source_pack_ids=list(source.source_pack_ids or []),
             scope_topics=list(source.scope_topics or []),
+            scope_topic_ids=list(source.scope_topic_ids or []),
             scope_refinement=source.scope_refinement,
             topic_summary=source.topic_summary,
             generate_without_sources=bool(source.generate_without_sources),

@@ -28,6 +28,8 @@ from app.domains.content_ingestion.services import (
     WorksheetService,
 )
 from app.domains.content_ingestion.jobs import run_ingestion_job_sync
+from app.domains.external_context.grade_utils import grade_label, resolve_grade_value
+from app.domains.external_context.subject_utils import resolve_subject_value, subject_teacher_tools_label
 from app.domains.content_ingestion.models import Document, DocumentProcessingRun
 from app.domains.content_ingestion.enums import DocumentStatus
 from app.domains.content_ingestion.services.processing_progress_view import (
@@ -39,6 +41,24 @@ from app.domains.subscriptions.credit_errors import insufficient_credits_detail
 from app.domains.subscriptions.feature_keys import WORKSHEET_GENERATE
 
 logger = get_logger(__name__)
+
+
+def _normalize_upload_pack_subject(raw: Optional[str]) -> Optional[str]:
+    if not raw or not str(raw).strip():
+        return None
+    canonical = resolve_subject_value(raw)
+    if canonical:
+        return subject_teacher_tools_label(canonical)
+    return str(raw).strip()
+
+
+def _normalize_upload_pack_grade(raw: Optional[str]) -> Optional[str]:
+    if not raw or not str(raw).strip():
+        return None
+    canonical = resolve_grade_value(raw)
+    if canonical:
+        return grade_label(canonical)
+    return str(raw).strip()
 
 router = APIRouter(prefix="/api/v1", tags=["content-ingestion"])
 
@@ -258,9 +278,9 @@ async def upload_document_with_stream(
                 pack_data = schemas.ContentPackCreate(
                     name=pack_name,
                     description=pack_description,
-                    subject=pack_subject,
-                    grade=pack_grade,
-                    curriculum=pack_curriculum
+                    subject=_normalize_upload_pack_subject(pack_subject),
+                    grade=_normalize_upload_pack_grade(pack_grade),
+                    curriculum=pack_curriculum,
                 )
                 pack = pack_service.create_pack(
                     data=pack_data,
@@ -315,6 +335,13 @@ async def upload_document_with_stream(
                 except json.JSONDecodeError:
                     yield f"data: {json.dumps({'type': 'error', 'message': 'Invalid chapter_map JSON'})}\n\n"
                     return
+                if isinstance(chapter_map_data, list):
+                    from app.domains.content_ingestion.chapter_map_validator import validate_chapter_map
+
+                    validation = validate_chapter_map(chapter_map_data)
+                    if not validation.ok:
+                        yield f"data: {json.dumps({'type': 'error', 'message': 'Invalid chapter_map', 'errors': validation.errors})}\n\n"
+                        return
             
             document_service = DocumentService(db)
             document = document_service.create_document(
@@ -453,6 +480,15 @@ async def upload_document(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid chapter_map JSON"
             )
+        if isinstance(chapter_map_data, list):
+            from app.domains.content_ingestion.chapter_map_validator import validate_chapter_map
+
+            validation = validate_chapter_map(chapter_map_data)
+            if not validation.ok:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={"message": "Invalid chapter_map", "errors": validation.errors},
+                )
     
     # Create document record
     service = DocumentService(db)
@@ -797,6 +833,82 @@ async def run_qa_validation(
     )
     
     return qa_validation
+
+
+@router.post("/admin/documents/{document_id}/reprocess-topics")
+async def reprocess_document_topics(
+    document_id: UUID,
+    current_user: User = Depends(require_any_role("super_admin", "org_admin")),
+    db: Session = Depends(get_db),
+):
+    """Rebuild document_topics and chunks.topic_fk without re-OCR or re-embedding."""
+    service = DocumentService(db)
+    document = service.get_document(document_id, current_user.tenant_id)
+    if not document:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+
+    from app.domains.content_ingestion.document_topics_service import populate_document_topics
+
+    report = populate_document_topics(db, document, replace_existing=True)
+    db.commit()
+    db.refresh(document)
+    return {
+        "document_id": str(document_id),
+        "topic_count": len(document.document_topics or []),
+        "coverage": report.coverage,
+        "chapters_with_zero_chunks": report.chapters_with_zero_chunks,
+    }
+
+
+@router.post("/admin/documents/{document_id}/rechunk-from-pages")
+async def rechunk_document_from_pages(
+    document_id: UUID,
+    current_user: User = Depends(require_any_role("super_admin", "org_admin")),
+    db: Session = Depends(get_db),
+):
+    """Re-chunk from stored page_texts, auto-extract sections, re-embed, rebuild topics."""
+    service = DocumentService(db)
+    document = service.get_document(document_id, current_user.tenant_id)
+    if not document:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+
+    from app.domains.content_ingestion.services.rechunk_service import RechunkService
+
+    rechunk = RechunkService(db)
+    report = await rechunk.rechunk_document(document_id)
+    if report.errors:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"errors": report.errors, **report.to_dict()},
+        )
+    db.refresh(document)
+    return report.to_dict()
+
+
+@router.get("/admin/documents/health-summary")
+async def document_topics_health_summary(
+    current_user: User = Depends(require_any_role("super_admin")),
+    db: Session = Depends(get_db),
+):
+    """Admin dashboard: document topic indexing health metrics."""
+    from sqlalchemy import text
+
+    rows = db.execute(
+        text(
+            """
+            SELECT document_id, filename, status, total_topics, empty_topics,
+                   fallback_topics, total_chunks, section_count,
+                   mislabeled_chunk_count, chapters_without_sections,
+                   chapter_coverage_pct
+            FROM document_topics_health
+            WHERE tenant_id = :tenant_id
+            ORDER BY chapter_coverage_pct ASC NULLS FIRST
+            LIMIT 200
+            """
+        ),
+        {"tenant_id": str(current_user.tenant_id)},
+    ).mappings().all()
+    return {"items": [dict(r) for r in rows]}
 
 
 @router.post("/admin/documents/{document_id}/publish", response_model=schemas.DocumentResponse)

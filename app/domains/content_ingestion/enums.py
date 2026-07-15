@@ -13,6 +13,7 @@ class DocumentStatus(str, enum.Enum):
     CHUNKING = "chunking"
     EMBEDDING = "embedding"
     INDEXING = "indexing"
+    TOPIC_VALIDATION = "topic_validation"
     QA_VALIDATION = "qa_validation"
     PUBLISHED = "published"
     FAILED = "failed"

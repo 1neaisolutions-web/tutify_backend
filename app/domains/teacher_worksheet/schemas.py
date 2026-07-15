@@ -49,6 +49,7 @@ class WorksheetApiResponse(BaseModel):
     topic: str
     sourceBookIds: List[str]
     scopeTopics: List[str]
+    scopeTopicIds: List[str] = Field(default_factory=list)
     scopeRefinement: Optional[str] = None
     sourceSummary: Optional[str] = None
     difficulty: Optional[str] = None
@@ -78,6 +79,7 @@ class WorksheetCreateRequest(BaseModel):
     status: WorksheetStatus = "draft"
     sourceBookIds: List[str] = Field(default_factory=list)
     scopeTopics: List[str] = Field(default_factory=list)
+    scopeTopicIds: List[str] = Field(default_factory=list)
     scopeRefinement: Optional[str] = None
     generateWithoutSources: bool = False
     difficulty: Optional[DifficultyId] = None
@@ -97,6 +99,7 @@ class WorksheetPatchRequest(BaseModel):
     dueAt: Optional[datetime] = None
     sourceBookIds: Optional[List[str]] = None
     scopeTopics: Optional[List[str]] = None
+    scopeTopicIds: Optional[List[str]] = None
     scopeRefinement: Optional[str] = None
     generateWithoutSources: Optional[bool] = None
     difficulty: Optional[DifficultyId] = None

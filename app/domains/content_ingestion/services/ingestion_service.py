@@ -18,8 +18,10 @@ from app.core.logging import get_logger
 from app.core.config import settings
 from app.llm.config import llm_settings
 from app.domains.content_ingestion.models import (
-    Document, PageText, Chunk, DocumentProcessingRun, ContentPack
+    Document, PageText, Chunk, DocumentProcessingRun, ContentPack, DocumentTopic
 )
+from app.domains.content_ingestion.document_topics_service import populate_document_topics
+from app.domains.content_ingestion.providers.chunkers import validate_topic_assignment
 from app.domains.content_ingestion.enums import DocumentStatus
 from app.domains.content_ingestion.detection import (
     detect_mime_and_source,
@@ -70,6 +72,7 @@ _INGESTION_ACTIVE_STATUSES = frozenset(
         DocumentStatus.OCR_RUNNING.value,
         DocumentStatus.NORMALIZING.value,
         DocumentStatus.CHUNKING.value,
+        DocumentStatus.TOPIC_VALIDATION.value,
         DocumentStatus.EMBEDDING.value,
         DocumentStatus.INDEXING.value,
         DocumentStatus.QA_VALIDATION.value,
@@ -804,6 +807,28 @@ class IngestionService:
                         "pdf_outline_toc_applied",
                         extra={"document_id": str(document_id), "entries": len(auto_map)},
                     )
+
+            if document.chapter_map and getattr(settings, "AUTO_EXTRACT_SECTION_TOC", True):
+                has_level2 = any(int(e.get("level") or 1) > 1 for e in document.chapter_map)
+                if not has_level2:
+                    pages_for_sections = [(p.page_no, p.text or "") for p in normalized_pages]
+                    from app.domains.content_ingestion.section_heading_extractor import (
+                        merge_sections_into_chapter_map,
+                    )
+                    enriched = merge_sections_into_chapter_map(
+                        list(document.chapter_map), pages_for_sections
+                    )
+                    sections_added = len(enriched) - len(document.chapter_map)
+                    if sections_added > 0:
+                        document.chapter_map = enriched
+                        meta_sec = dict(document.processing_metadata or {})
+                        meta_sec["sections_auto_extracted"] = sections_added
+                        document.processing_metadata = meta_sec
+                        self.db.commit()
+                        logger.info(
+                            "auto_sections_extracted",
+                            extra={"document_id": str(document_id), "sections_added": sections_added},
+                        )
             
             # Step 4: Chunking (adaptive profiles for OCR vs digital)
             t0 = time.perf_counter()
@@ -906,6 +931,8 @@ class IngestionService:
                 "chunks_topic_fallback_filled": topic_fallback_fill_count,
                 "catalog_toc_source": meta.get("toc_source"),
             }
+            assignment_report = validate_topic_assignment(chunks, document.chapter_map)
+            meta["topic_assignment_report"] = assignment_report
             document.processing_metadata = meta
             logger.info(
                 "role_tagging",
@@ -989,6 +1016,32 @@ class IngestionService:
             processing_run.vectors_stored = stored_count
             processing_run.progress_percentage = 90
             self.db.commit()
+
+            # Topic validation + document_topics population (after chunks persisted)
+            await self._update_status(document_id, DocumentStatus.TOPIC_VALIDATION.value, processing_run)
+            document = self.db.query(Document).filter(Document.id == document_id).first()
+            if document:
+                topic_report = populate_document_topics(self.db, document, replace_existing=True)
+                validation_warnings = [
+                    {"chapter": title, "issue": "0 chunks assigned"}
+                    for title in topic_report.chapters_with_zero_chunks
+                ]
+                if validation_warnings:
+                    meta_tv = dict(document.processing_metadata or {})
+                    meta_tv["topic_validation_warnings"] = validation_warnings
+                    document.processing_metadata = meta_tv
+                    threshold = float(getattr(settings, "TOPIC_COVERAGE_WARNING_THRESHOLD", 0.95))
+                    if topic_report.coverage < threshold:
+                        document.status = DocumentStatus.WARNING.value
+                        meta_tv["topic_coverage_warning"] = (
+                            f"Topic coverage {topic_report.coverage:.1%} below threshold {threshold:.0%}."
+                        )
+                        document.processing_metadata = meta_tv
+                    logger.warning(
+                        "topic_validation_warnings",
+                        extra={"document_id": str(document_id), "warnings": validation_warnings},
+                    )
+                self.db.commit()
             
             # Step 7: QA Validation
             await self._update_status(document_id, DocumentStatus.QA_VALIDATION.value, processing_run)
@@ -1425,6 +1478,7 @@ class IngestionService:
             DocumentStatus.OCR_RUNNING.value: 20,
             DocumentStatus.NORMALIZING.value: 30,
             DocumentStatus.CHUNKING.value: 40,
+            DocumentStatus.TOPIC_VALIDATION.value: 55,
             DocumentStatus.EMBEDDING.value: 60,
             DocumentStatus.INDEXING.value: 80,
             DocumentStatus.QA_VALIDATION.value: 90,

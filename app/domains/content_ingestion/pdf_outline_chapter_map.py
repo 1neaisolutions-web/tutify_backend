@@ -8,12 +8,26 @@ chunk with meaningful topic_title values for quiz / catalog topic strands.
 from __future__ import annotations
 
 import os
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.logging import get_logger
 from app.domains.content_ingestion.topic_label_normalize import normalize_topic_label
 
 logger = get_logger(__name__)
+
+TOC_LINE_PATTERNS = [
+    re.compile(r"(.+?)\s*\.{2,}\s*(\d+)\s*$"),
+    re.compile(r"(.+?)\s{3,}(\d+)\s*$"),
+    re.compile(r"(.+?)\s+(\d+)\s*$"),
+]
+
+CHAPTER_HEADING_PATTERNS = [
+    re.compile(r"^(chapter|unit|section|module|part|lesson)\s+\d+", re.I),
+    re.compile(r"^(capítulo|unidad|sección)\s+\d+", re.I),
+    re.compile(r"^(chapitre|unité|section)\s+\d+", re.I),
+    re.compile(r"^(kapitel|einheit|abschnitt)\s+\d+", re.I),
+]
 
 
 def _flatten_outline(nodes: Any) -> List[Any]:
@@ -151,3 +165,120 @@ def build_chapter_map_from_pdf_outline(
             }
         )
     return chapters
+
+
+def _parse_toc_page_text(pages_text: List[str], total_pages: int) -> Optional[List[Dict[str, Any]]]:
+    """Parse TOC lines from first pages: 'Chapter 1 ..... 5'."""
+    combined = "\n".join(pages_text[:15])
+    if "contents" not in combined.lower() and "table of contents" not in combined.lower():
+        if not any(p.search(combined[:2000]) for p in CHAPTER_HEADING_PATTERNS):
+            pass
+    entries: List[tuple[int, str]] = []
+    for line in combined.splitlines():
+        line = line.strip()
+        if len(line) < 4:
+            continue
+        for pat in TOC_LINE_PATTERNS:
+            m = pat.match(line)
+            if m:
+                title = m.group(1).strip().strip(".")
+                page_num = int(m.group(2))
+                if 1 <= page_num <= total_pages and len(title) >= 2:
+                    entries.append((page_num, title[:500]))
+                break
+    if len(entries) < 2:
+        return None
+    entries.sort(key=lambda x: x[0])
+    chapters: List[Dict[str, Any]] = []
+    for i, (start_page, title) in enumerate(entries):
+        end_page = entries[i + 1][0] - 1 if i + 1 < len(entries) else total_pages
+        end_page = min(max(end_page, start_page), total_pages)
+        chapters.append(
+            {
+                "id": f"toc-{i + 1}",
+                "title": title,
+                "level": 1,
+                "parent_id": None,
+                "start_page_pdf": start_page,
+                "end_page_pdf": end_page,
+                "keywords": [],
+            }
+        )
+    return chapters
+
+
+def _chapter_map_from_heading_heuristics(
+    pages_text: List[tuple[int, str]],
+    total_pages: int,
+) -> Optional[List[Dict[str, Any]]]:
+    """Detect chapter starts from heading patterns across page boundaries."""
+    starts: List[tuple[int, str]] = []
+    for page_no, text in pages_text:
+        for line in (text or "").splitlines()[:8]:
+            line = line.strip()
+            if len(line) < 4:
+                continue
+            for pat in CHAPTER_HEADING_PATTERNS:
+                if pat.match(line):
+                    starts.append((page_no, line[:500]))
+                    break
+    if len(starts) < 2:
+        return None
+    starts.sort(key=lambda x: x[0])
+    chapters: List[Dict[str, Any]] = []
+    for i, (start_page, title) in enumerate(starts):
+        end_page = starts[i + 1][0] - 1 if i + 1 < len(starts) else total_pages
+        end_page = min(max(end_page, start_page), total_pages)
+        chapters.append(
+            {
+                "id": f"heading-{i + 1}",
+                "title": title,
+                "level": 1,
+                "parent_id": None,
+                "start_page_pdf": start_page,
+                "end_page_pdf": end_page,
+                "keywords": [],
+            }
+        )
+    return chapters
+
+
+def extract_chapter_map(
+    document: Any,
+    pages: Optional[List[Any]] = None,
+    *,
+    file_path: Optional[str] = None,
+    total_pages: int = 0,
+) -> tuple[Optional[List[Dict[str, Any]]], str]:
+    """
+    Ranked TOC extraction strategies. Returns (chapter_map, toc_source).
+    """
+    if document.chapter_map and isinstance(document.chapter_map, list) and len(document.chapter_map) >= 1:
+        return document.chapter_map, "client_json"
+
+    path = file_path or getattr(document, "file_path", None)
+    tp = total_pages or getattr(document, "total_pages", 0) or 0
+
+    outline_map = build_chapter_map_from_pdf_outline(path, tp) if path and tp else None
+    if outline_map:
+        return outline_map, "pdf_outline_auto"
+
+    page_texts: List[str] = []
+    page_pairs: List[tuple[int, str]] = []
+    if pages:
+        for p in pages:
+            text = getattr(p, "text", "") or ""
+            page_texts.append(text)
+            page_pairs.append((getattr(p, "page_no", 0), text))
+
+    if page_texts and tp:
+        toc_map = _parse_toc_page_text(page_texts, tp)
+        if toc_map:
+            return toc_map, "toc_page_text"
+
+    if page_pairs and tp:
+        heading_map = _chapter_map_from_heading_heuristics(page_pairs, tp)
+        if heading_map:
+            return heading_map, "heading_heuristics"
+
+    return None, "none"

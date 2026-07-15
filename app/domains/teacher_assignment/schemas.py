@@ -46,6 +46,7 @@ class AssignmentCreateRequest(BaseModel):
 
     sourceBookIds: List[str] = Field(default_factory=list)
     scopeTopics: List[str] = Field(default_factory=list)
+    scopeTopicIds: List[str] = Field(default_factory=list)
     scopeRefinement: Optional[str] = None
     generateWithoutSources: bool = False
 
@@ -70,6 +71,7 @@ class AssignmentPatchRequest(BaseModel):
 
     sourceBookIds: Optional[List[str]] = None
     scopeTopics: Optional[List[str]] = None
+    scopeTopicIds: Optional[List[str]] = None
     scopeRefinement: Optional[str] = None
     generateWithoutSources: Optional[bool] = None
     difficulty: Optional[DifficultyId] = None
@@ -124,6 +126,7 @@ class AssignmentResponse(BaseModel):
 
     sourceBookIds: List[str] = Field(default_factory=list)
     scopeTopics: List[str] = Field(default_factory=list)
+    scopeTopicIds: List[str] = Field(default_factory=list)
     scopeRefinement: Optional[str] = None
     generateWithoutSources: bool = False
     rigorProfile: str = "Standard"

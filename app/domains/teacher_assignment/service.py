@@ -11,10 +11,17 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.domains.auth.models import User
+from app.domains.content_ingestion.teacher_scope_validation import (
+    SourcedScopeValidationError,
+    parse_scope_topic_ids,
+    validate_sourced_scope,
+)
+from app.domains.content_ingestion.topic_scope import RetrievalScopeError
 from app.domains.teacher_assignment.errors import (
     AssignmentError,
     generation_failed,
     not_found,
+    retrieval_scope_failed,
     validation_failed,
 )
 from app.domains.teacher_assignment.generation import AssignmentGenerationService
@@ -60,6 +67,50 @@ def _materialize_brief_topics(gen_topics: list) -> List[Dict[str, Any]]:
     return result
 
 
+def _assignment_retrieval(
+    service: "TeacherAssignmentService",
+    *,
+    assignment: TeacherAssignment,
+    tenant_id: UUID,
+    max_chunks: int,
+) -> Tuple[str, list, List[str], Dict[str, Any]]:
+    if assignment.generate_without_sources:
+        return "", [], [], {}
+    try:
+        validate_sourced_scope(
+            service.db,
+            tenant_id=tenant_id,
+            generate_without_sources=False,
+            source_pack_ids=list(assignment.source_pack_ids or []),
+            scope_topic_ids=list(assignment.scope_topic_ids or []),
+        )
+    except SourcedScopeValidationError as e:
+        raise validation_failed(e.message) from e
+    try:
+        pack_ids = [UUID(x) for x in (assignment.source_pack_ids or []) if x]
+    except Exception:
+        raise validation_failed("Invalid pack IDs on assignment.")
+    scope_ids = parse_scope_topic_ids(assignment.scope_topic_ids)
+    try:
+        rr = service.retrieval.retrieve(
+            tenant_id=tenant_id,
+            pack_ids=pack_ids,
+            topics=list(assignment.scope_topics or []),
+            scope_topic_ids=scope_ids,
+            refinement=assignment.scope_refinement,
+            max_chunks=max_chunks,
+            generate_without_sources=False,
+            seed=str(assignment.id),
+        )
+    except RetrievalScopeError as e:
+        raise retrieval_scope_failed(
+            e.message,
+            topic_ids=e.topic_ids,
+            fallback_available=e.fallback_available,
+        ) from e
+    return rr.context_text, rr.citations, list(rr.warnings), dict(rr.metadata or {})
+
+
 class TeacherAssignmentService:
     def __init__(self, db: Session):
         self.db = db
@@ -87,6 +138,16 @@ class TeacherAssignmentService:
         return a
 
     def create_assignment(self, *, current_user: User, payload: Dict[str, Any]) -> TeacherAssignment:
+        try:
+            validate_sourced_scope(
+                self.db,
+                tenant_id=current_user.tenant_id,
+                generate_without_sources=bool(payload.get("generateWithoutSources") or False),
+                source_pack_ids=list(payload.get("sourceBookIds") or []),
+                scope_topic_ids=list(payload.get("scopeTopicIds") or []),
+            )
+        except SourcedScopeValidationError as e:
+            raise validation_failed(e.message) from e
         now = datetime.now(timezone.utc)
         brief = list(payload.get("briefTopics") or [])
         tc, lc = _compute_counts(brief)
@@ -107,6 +168,7 @@ class TeacherAssignmentService:
             assigned_at=payload.get("assignedAt"),
             source_pack_ids=list(payload.get("sourceBookIds") or []),
             scope_topics=list(payload.get("scopeTopics") or []),
+            scope_topic_ids=list(payload.get("scopeTopicIds") or []),
             scope_refinement=payload.get("scopeRefinement"),
             topic_summary=_topic_summary(
                 list(payload.get("scopeTopics") or []),
@@ -153,6 +215,7 @@ class TeacherAssignmentService:
             ("assignedAt", "assigned_at"),
             ("sourceBookIds", "source_pack_ids"),
             ("scopeTopics", "scope_topics"),
+            ("scopeTopicIds", "scope_topic_ids"),
             ("scopeRefinement", "scope_refinement"),
             ("generateWithoutSources", "generate_without_sources"),
             ("difficulty", "difficulty"),
@@ -168,8 +231,22 @@ class TeacherAssignmentService:
             a.topics_count = tc
             a.lines_count = lc
 
-        if "scopeTopics" in patch or "scopeRefinement" in patch:
+        if "scopeTopics" in patch or "scopeRefinement" in patch or "scopeTopicIds" in patch:
             a.topic_summary = _topic_summary(list(a.scope_topics or []), a.scope_refinement)
+
+        if not a.generate_without_sources and (
+            "scopeTopicIds" in patch or "scopeTopics" in patch or "sourceBookIds" in patch
+        ):
+            try:
+                validate_sourced_scope(
+                    self.db,
+                    tenant_id=current_user.tenant_id,
+                    generate_without_sources=False,
+                    source_pack_ids=list(a.source_pack_ids or []),
+                    scope_topic_ids=list(a.scope_topic_ids or []),
+                )
+            except SourcedScopeValidationError as e:
+                raise validation_failed(e.message) from e
 
         a.updated_at = datetime.now(timezone.utc)
         return self.repo.update_assignment(a)
@@ -223,22 +300,12 @@ class TeacherAssignmentService:
         retrieval_meta: Dict[str, Any] = {}
 
         if not a.generate_without_sources:
-            try:
-                pack_ids = [UUID(x) for x in (a.source_pack_ids or []) if x]
-            except Exception:
-                raise validation_failed("Invalid pack IDs on assignment.")
-            if pack_ids:
-                rr = self.retrieval.retrieve(
-                    tenant_id=current_user.tenant_id,
-                    pack_ids=pack_ids,
-                    topics=list(a.scope_topics or []),
-                    refinement=a.scope_refinement,
-                    max_chunks=18,
-                )
-                context_text = rr.context_text
-                citations = rr.citations
-                retrieval_warnings.extend(rr.warnings)
-                retrieval_meta = rr.metadata
+            context_text, citations, retrieval_warnings, retrieval_meta = _assignment_retrieval(
+                self,
+                assignment=a,
+                tenant_id=current_user.tenant_id,
+                max_chunks=18,
+            )
         else:
             retrieval_warnings.append("Generation without sources (grounding off).")
 
@@ -388,19 +455,12 @@ class TeacherAssignmentService:
 
         context_text = ""
         if not a.generate_without_sources:
-            try:
-                pack_ids = [UUID(x) for x in (a.source_pack_ids or []) if x]
-            except Exception:
-                pack_ids = []
-            if pack_ids:
-                rr = self.retrieval.retrieve(
-                    tenant_id=current_user.tenant_id,
-                    pack_ids=pack_ids,
-                    topics=[topic_title],
-                    refinement=a.scope_refinement,
-                    max_chunks=6,
-                )
-                context_text = rr.context_text
+            context_text, _, _, _ = _assignment_retrieval(
+                self,
+                assignment=a,
+                tenant_id=current_user.tenant_id,
+                max_chunks=6,
+            )
 
         timeout_s = float(getattr(settings, "QUIZ_GENERATION_TIMEOUT_SECONDS", 180.0))
         try:
@@ -484,19 +544,12 @@ class TeacherAssignmentService:
 
         context_text = ""
         if not a.generate_without_sources:
-            try:
-                pack_ids = [UUID(x) for x in (a.source_pack_ids or []) if x]
-            except Exception:
-                pack_ids = []
-            if pack_ids:
-                rr = self.retrieval.retrieve(
-                    tenant_id=current_user.tenant_id,
-                    pack_ids=pack_ids,
-                    topics=[topic_title],
-                    refinement=a.scope_refinement,
-                    max_chunks=4,
-                )
-                context_text = rr.context_text
+            context_text, _, _, _ = _assignment_retrieval(
+                self,
+                assignment=a,
+                tenant_id=current_user.tenant_id,
+                max_chunks=4,
+            )
 
         timeout_s = float(getattr(settings, "QUIZ_GENERATION_TIMEOUT_SECONDS", 180.0))
         try:

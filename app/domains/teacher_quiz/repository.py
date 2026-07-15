@@ -323,6 +323,8 @@ class TeacherQuizRepository:
             due_at=None,
             source_pack_ids=list(source.source_pack_ids or []),
             scope_topics=list(source.scope_topics or []),
+            scope_topic_ids=list(source.scope_topic_ids or []),
+            scope_book_ids=source.scope_book_ids,
             scope_refinement=source.scope_refinement,
             topic_summary=source.topic_summary,
             generate_without_sources=bool(source.generate_without_sources),

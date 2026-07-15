@@ -19,6 +19,8 @@ from app.domains.content_ingestion.quiz_catalog_schemas import (
     CatalogBookCard,
     CatalogListParams,
     CatalogListResponse,
+    CatalogStructureRequest,
+    CatalogStructureResponse,
     ScopePreviewRequest,
     ScopePreviewResponse,
     TopicsRequest,
@@ -44,10 +46,21 @@ _ALLOWED_ROLES = ("teacher", "school_admin", "super_admin", "org_admin")
     summary="List available content-pack books for quiz generation",
 )
 def list_catalog(
-    subject: Optional[str] = Query(None, description="Filter by subject (case-insensitive, partial match)"),
-    grade: Optional[str] = Query(None, description="Filter by grade (case-insensitive, partial match)"),
+    subject: Optional[str] = Query(
+        None,
+        description="Filter by subject — canonical slug (math) or label (Mathematics)",
+    ),
+    grade: Optional[str] = Query(
+        None,
+        description="Filter by grade — canonical value (8) or label (Grade 8)",
+    ),
     curriculum: Optional[str] = Query(None, description="Filter by curriculum (exact match)"),
     q: Optional[str] = Query(None, description="Free-text search across name, description, subject"),
+    strict: bool = Query(True, description="When false, skip subject/grade filter (browse all)"),
+    include_near_matches: bool = Query(
+        False,
+        description="When strict filter returns no items, include same-subject other-grade packs",
+    ),
     page: int = Query(1, ge=1, description="1-indexed page number"),
     page_size: int = Query(20, ge=1, le=100, description="Items per page"),
     current_user: User = Depends(require_any_role(*_ALLOWED_ROLES)),
@@ -55,20 +68,23 @@ def list_catalog(
 ) -> CatalogListResponse:
     """
     Return a paginated list of active content packs that have at least one
-    published document.  Results are scoped to the caller's tenant.
+    published document. Results are scoped to the caller's tenant.
+    Subject and grade accept canonical slugs or display labels; matching is normalized.
     """
     params = CatalogListParams(
         subject=subject,
         grade=grade,
         curriculum=curriculum,
         q=q,
+        strict=strict,
+        include_near_matches=include_near_matches,
         page=page,
         page_size=page_size,
     )
 
     try:
         service = QuizCatalogService(db)
-        packs, total = service.get_catalog(
+        packs, total, near_packs = service.get_catalog(
             tenant_id=current_user.tenant_id,
             params=params,
         )
@@ -76,14 +92,21 @@ def list_catalog(
             service.build_catalog_card(pack, current_user.tenant_id)
             for pack in packs
         ]
+        near_items = [
+            service.build_catalog_card(pack, current_user.tenant_id)
+            for pack in near_packs
+        ]
 
         logger.info(
             "quiz_catalog_list",
             extra={
                 "tenant_id": str(current_user.tenant_id),
                 "subject": subject,
+                "grade": grade,
+                "strict": strict,
                 "q": q,
                 "total": total,
+                "near_matches": len(near_items),
                 "page": page,
                 "page_size": page_size,
             },
@@ -94,6 +117,7 @@ def list_catalog(
             page=page,
             page_size=page_size,
             items=items,
+            near_matches=near_items,
         )
 
     except HTTPException:
@@ -111,13 +135,15 @@ def list_catalog(
 
 
 # ---------------------------------------------------------------------------
-# POST /api/v1/quiz/catalog/topics
+# POST /api/v1/quiz/catalog/topics  (DEPRECATED — use POST /catalog/structure)
 # ---------------------------------------------------------------------------
 
 @router.post(
     "/catalog/topics",
     response_model=TopicsResponse,
     summary="Get aggregated topic strands for the given content packs",
+    deprecated=True,
+    description="Deprecated: use POST /catalog/structure for hierarchical topic trees with stable IDs.",
 )
 def get_catalog_topics(
     body: TopicsRequest,
@@ -152,6 +178,41 @@ def get_catalog_topics(
     except Exception:
         logger.error(
             "quiz_catalog_topics_error",
+            extra={"tenant_id": str(current_user.tenant_id)},
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        )
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/quiz/catalog/structure
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/catalog/structure",
+    response_model=CatalogStructureResponse,
+    summary="Get hierarchical book-chapter-topic structure for content packs",
+)
+def get_catalog_structure(
+    body: CatalogStructureRequest,
+    current_user: User = Depends(require_any_role(*_ALLOWED_ROLES)),
+    db: Session = Depends(get_db),
+) -> CatalogStructureResponse:
+    """Return per-document topic trees with stable document_topics.id UUIDs."""
+    try:
+        service = QuizCatalogService(db)
+        return service.get_catalog_structure(
+            tenant_id=current_user.tenant_id,
+            pack_ids=body.pack_ids,
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        logger.error(
+            "quiz_catalog_structure_error",
             extra={"tenant_id": str(current_user.tenant_id)},
             exc_info=True,
         )

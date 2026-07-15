@@ -11,7 +11,10 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.domains.auth.models import User
-from app.domains.teacher_quiz.errors import QuizError, generation_failed, not_found, validation_failed
+from app.domains.content_ingestion.models import DocumentTopic
+from app.domains.content_ingestion.scope_query import validate_scope_topic_ids_for_tenant
+from app.domains.content_ingestion.topic_scope import RetrievalScopeError
+from app.domains.teacher_quiz.errors import QuizError, generation_failed, not_found, retrieval_scope_failed, validation_failed
 from app.domains.teacher_quiz.generation import QuizGenerationService
 from app.domains.teacher_quiz.models import TeacherQuiz, TeacherQuizGenerationRun, TeacherQuizQuestion
 from app.domains.teacher_quiz.repository import QuizListFilters, TeacherQuizRepository
@@ -25,6 +28,62 @@ def _topic_summary(scope_topics: List[str], scope_refinement: Optional[str]) -> 
     if scope_refinement and scope_refinement.strip():
         return f"{base} — {scope_refinement.strip()}" if base else scope_refinement.strip()
     return base or "General scope"
+
+
+def _parse_scope_topic_ids(raw: Optional[List[Any]]) -> List[UUID]:
+    out: List[UUID] = []
+    for item in raw or []:
+        try:
+            out.append(UUID(str(item)))
+        except (ValueError, TypeError):
+            continue
+    return out
+
+
+def _compute_max_chunks(question_count: int) -> int:
+    per_q = int(getattr(settings, "QUIZ_MAX_CHUNKS_PER_QUESTION", 3))
+    cap = int(getattr(settings, "QUIZ_MAX_CHUNKS_CAP", 30))
+    return min(cap, max(6, question_count * per_q))
+
+
+def _validate_sourced_scope(
+    db: Session,
+    *,
+    tenant_id: UUID,
+    generate_without_sources: bool,
+    source_pack_ids: List[Any],
+    scope_topic_ids: Optional[List[Any]],
+) -> None:
+    if generate_without_sources:
+        return
+    strict = bool(getattr(settings, "QUIZ_STRICT_SCOPE_ONLY", True))
+    if not strict:
+        return
+    ids = _parse_scope_topic_ids(scope_topic_ids)
+    if not ids:
+        raise validation_failed("Select at least one chapter or topic.")
+    try:
+        pack_ids = [UUID(str(x)) for x in (source_pack_ids or []) if x]
+    except (ValueError, TypeError) as e:
+        raise validation_failed("Invalid pack IDs on quiz.") from e
+    if not pack_ids:
+        raise validation_failed("Select at least one source book.")
+    valid = validate_scope_topic_ids_for_tenant(
+        db, tenant_id=tenant_id, pack_ids=pack_ids, topic_ids=ids
+    )
+    if len(valid) != len(ids):
+        raise validation_failed("One or more selected topics are invalid for the chosen books.")
+
+
+def _allowed_topic_titles(db: Session, topic_ids: List[UUID]) -> List[str]:
+    if not topic_ids:
+        return []
+    rows = (
+        db.query(DocumentTopic.display_title)
+        .filter(DocumentTopic.id.in_(topic_ids))
+        .all()
+    )
+    return [r[0] for r in rows if r[0]]
 
 
 def _compute_total_marks(questions: List[TeacherQuizQuestion]) -> float:
@@ -60,6 +119,13 @@ class TeacherQuizService:
         return quiz
 
     def create_quiz(self, *, current_user: User, payload: Dict[str, Any]) -> TeacherQuiz:
+        _validate_sourced_scope(
+            self.db,
+            tenant_id=current_user.tenant_id,
+            generate_without_sources=bool(payload.get("generateWithoutSources") or False),
+            source_pack_ids=list(payload.get("sourceBookIds") or []),
+            scope_topic_ids=list(payload.get("scopeTopicIds") or []),
+        )
         now = datetime.now(timezone.utc)
         quiz = TeacherQuiz(
             id=uuid4(),
@@ -77,6 +143,8 @@ class TeacherQuizService:
             due_at=payload.get("dueAt"),
             source_pack_ids=list(payload.get("sourceBookIds") or []),
             scope_topics=list(payload.get("scopeTopics") or []),
+            scope_topic_ids=list(payload.get("scopeTopicIds") or []),
+            scope_book_ids=payload.get("scopeBookIds"),
             scope_refinement=payload.get("scopeRefinement"),
             topic_summary=_topic_summary(list(payload.get("scopeTopics") or []), payload.get("scopeRefinement")),
             generate_without_sources=bool(payload.get("generateWithoutSources") or False),
@@ -114,6 +182,8 @@ class TeacherQuizService:
             ("dueAt", "due_at"),
             ("sourceBookIds", "source_pack_ids"),
             ("scopeTopics", "scope_topics"),
+            ("scopeTopicIds", "scope_topic_ids"),
+            ("scopeBookIds", "scope_book_ids"),
             ("scopeRefinement", "scope_refinement"),
             ("generateWithoutSources", "generate_without_sources"),
             ("difficulty", "difficulty"),
@@ -244,20 +314,44 @@ class TeacherQuizService:
 
         # Retrieve context (reuse same RAG pipeline)
         context_text = ""
+        citations: List[Dict[str, str]] = []
+        chunk_texts: Dict[str, str] = {}
+        allowed_titles: List[str] = []
         if not quiz.generate_without_sources:
+            _validate_sourced_scope(
+                self.db,
+                tenant_id=current_user.tenant_id,
+                generate_without_sources=False,
+                source_pack_ids=list(quiz.source_pack_ids or []),
+                scope_topic_ids=list(quiz.scope_topic_ids or []),
+            )
             try:
                 pack_ids = [UUID(x) for x in (quiz.source_pack_ids or []) if x]
             except Exception:
                 raise validation_failed("Invalid pack IDs on quiz.")
             if pack_ids:
-                rr = self.retrieval.retrieve(
-                    tenant_id=current_user.tenant_id,
-                    pack_ids=pack_ids,
-                    topics=list(quiz.scope_topics or []),
-                    refinement=quiz.scope_refinement,
-                    max_chunks=8,  # smaller window — just one question
-                )
+                scope_ids = _parse_scope_topic_ids(quiz.scope_topic_ids)
+                try:
+                    rr = self.retrieval.retrieve(
+                        tenant_id=current_user.tenant_id,
+                        pack_ids=pack_ids,
+                        topics=list(quiz.scope_topics or []),
+                        scope_topic_ids=scope_ids,
+                        refinement=quiz.scope_refinement,
+                        max_chunks=_compute_max_chunks(1),
+                        generate_without_sources=False,
+                        seed=str(quiz.id),
+                    )
+                except RetrievalScopeError as e:
+                    raise retrieval_scope_failed(
+                        e.message,
+                        topic_ids=e.topic_ids,
+                        fallback_available=e.fallback_available,
+                    ) from e
                 context_text = rr.context_text
+                citations = rr.citations
+                chunk_texts = rr.chunk_texts
+                allowed_titles = _allowed_topic_titles(self.db, scope_ids)
 
         # Generate exactly 1 question of the same type
         qtype = question.type
@@ -278,6 +372,10 @@ class TeacherQuizService:
                     context_text=context_text,
                     avoid_prompts=[q.prompt for q in (quiz.questions or []) if q.prompt],
                     must_differ_from=question.prompt,
+                    allowed_topic_titles=allowed_titles,
+                    sources_grounded=not quiz.generate_without_sources,
+                    source_citations=citations,
+                    chunk_texts=chunk_texts,
                 ),
                 timeout=timeout_s,
             )
@@ -297,6 +395,7 @@ class TeacherQuizService:
             "options": new_q.options,
             "response_lines": new_q.response_lines,
             "reviewBadges": (new_q.extra or {}).get("reviewBadges"),
+            "extra": new_q.extra,
         }
         return self.repo.patch_question(quiz, question, patch)
 
@@ -334,28 +433,64 @@ class TeacherQuizService:
         # Retrieval (only when sources enabled)
         context_text = ""
         citations: List[Dict[str, str]] = []
+        chunk_texts: Dict[str, str] = {}
         retrieval_warnings: List[str] = []
         retrieval_meta: Dict[str, Any] = {}
 
         if not quiz.generate_without_sources:
+            _validate_sourced_scope(
+                self.db,
+                tenant_id=current_user.tenant_id,
+                generate_without_sources=False,
+                source_pack_ids=list(quiz.source_pack_ids or []),
+                scope_topic_ids=list(quiz.scope_topic_ids or []),
+            )
             try:
                 pack_ids = [UUID(x) for x in (quiz.source_pack_ids or []) if x]
             except Exception:
                 raise validation_failed("Invalid pack IDs on quiz.")
 
-            rr = self.retrieval.retrieve(
-                tenant_id=current_user.tenant_id,
-                pack_ids=pack_ids,
-                topics=list(quiz.scope_topics or []),
-                refinement=quiz.scope_refinement,
-                max_chunks=18,
-            )
+            scope_ids = _parse_scope_topic_ids(quiz.scope_topic_ids)
+            max_chunks = _compute_max_chunks(question_count)
+            try:
+                rr = self.retrieval.retrieve(
+                    tenant_id=current_user.tenant_id,
+                    pack_ids=pack_ids,
+                    topics=list(quiz.scope_topics or []),
+                    scope_topic_ids=scope_ids,
+                    refinement=quiz.scope_refinement,
+                    max_chunks=max_chunks,
+                    generate_without_sources=bool(quiz.generate_without_sources),
+                    seed=str(quiz.id),
+                )
+            except RetrievalScopeError as e:
+                raise retrieval_scope_failed(
+                    e.message,
+                    topic_ids=e.topic_ids,
+                    fallback_available=e.fallback_available,
+                ) from e
             context_text = rr.context_text
             citations = rr.citations
+            chunk_texts = rr.chunk_texts
             retrieval_warnings.extend(rr.warnings)
             retrieval_meta = rr.metadata
+            allowed_titles = _allowed_topic_titles(
+                self.db, _parse_scope_topic_ids(quiz.scope_topic_ids)
+            )
+            if not retrieval_meta.get("applied_topic_filter") or int(
+                retrieval_meta.get("chunk_count") or 0
+            ) == 0:
+                logger.warning(
+                    "quiz_scope_anomaly",
+                    extra={
+                        "quiz_id": str(quiz.id),
+                        "tenant_id": str(current_user.tenant_id),
+                        "metadata": retrieval_meta,
+                    },
+                )
         else:
             retrieval_warnings.append("Generation without sources (grounding off).")
+            allowed_titles = []
 
         # LLM generation with timeout guard
         timeout_s = float(getattr(settings, "QUIZ_GENERATION_TIMEOUT_SECONDS", 180.0))
@@ -390,6 +525,10 @@ class TeacherQuizService:
                     teacher_notes=teacher_notes,
                     context_text=context_text,
                     avoid_prompts=[q.prompt for q in (quiz.questions or []) if q.prompt],
+                    allowed_topic_titles=allowed_titles,
+                    sources_grounded=not quiz.generate_without_sources,
+                    source_citations=citations,
+                    chunk_texts=chunk_texts,
                 ),
                 timeout=timeout_s,
             )

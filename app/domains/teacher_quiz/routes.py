@@ -97,6 +97,7 @@ def _to_quiz_response(q: TeacherQuiz) -> QuizResponse:
         topic=_topic_for_response(q),
         sourceBookIds=[str(x) for x in (q.source_pack_ids or [])],
         scopeTopics=list(q.scope_topics or []),
+        scopeTopicIds=[str(x) for x in (q.scope_topic_ids or [])],
         scopeRefinement=q.scope_refinement,
         sourceSummary=_source_summary(q),
         questionStubs=stubs,  # type: ignore[arg-type]
@@ -110,7 +111,10 @@ def _to_quiz_response(q: TeacherQuiz) -> QuizResponse:
 
 
 def _raise_domain_error(e: QuizError) -> None:
-    raise HTTPException(status_code=e.http_status, detail={"code": e.code, "message": e.message})
+    detail: dict = {"code": e.code, "message": e.message}
+    if e.extra:
+        detail.update(e.extra)
+    raise HTTPException(status_code=e.http_status, detail=detail)
 
 
 @router.get("/quizzes", response_model=QuizListResponse)

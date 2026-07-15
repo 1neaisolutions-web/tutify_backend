@@ -68,6 +68,7 @@ from app.domains.content_ingestion.models import (  # noqa: F401, E402
     Document,
     PageText,
     Chunk,
+    DocumentTopic,
     DocumentProcessingRun,
     QAValidation,
     WorksheetCache,
