@@ -163,6 +163,10 @@ class User(Base):
     last_login_at = Column(DateTime(timezone=True), nullable=True)
     last_password_change_at = Column(DateTime(timezone=True), nullable=True)
     must_change_password = Column(Boolean, default=False, nullable=False)
+
+    # MFA (TOTP) for super_admin accounts
+    mfa_secret_encrypted = Column(String(500), nullable=True)
+    mfa_enabled_at = Column(DateTime(timezone=True), nullable=True)
     
     # Timestamps
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)

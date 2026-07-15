@@ -504,6 +504,77 @@ class AuthService:
         )
         
         return login_token, memberships
+
+    def create_mfa_login_token(self, user: User) -> str:
+        """Short-lived token for MFA enrollment/verification during login."""
+        return create_access_token(
+            {"user_id": str(user.id), "purpose": "mfa_challenge"},
+            expires_delta=timedelta(minutes=10),
+        )
+
+    def complete_mfa_login(
+        self,
+        login_token: str,
+        code: str,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None,
+        enroll: bool = False,
+    ) -> tuple[str, str, User]:
+        """Complete MFA challenge and issue tokens with mfa_verified claim."""
+        from app.domains.auth.services.mfa_service import MfaService
+
+        try:
+            token_data = decode_token(login_token)
+            if token_data.get("purpose") not in ("mfa_challenge", "login_challenge"):
+                raise InvalidTokenError("Invalid login token")
+            user_id = UUID(token_data.get("user_id"))
+        except Exception:
+            raise InvalidTokenError("Invalid login token")
+
+        user = self.db.query(User).filter(User.id == user_id).first()
+        if not user:
+            raise InvalidCredentialsError()
+
+        mfa = MfaService(self.db)
+        if enroll:
+            mfa.verify_and_enable(user, code)
+        elif not mfa.verify_code(user, code):
+            raise InvalidCredentialsError("Invalid MFA code")
+
+        access_token = create_access_token({
+            "user_id": str(user.id),
+            "email": user.email,
+            "tenant_id": str(user.tenant_id),
+            "mfa_verified": True,
+        })
+        refresh_token_string = create_refresh_token({"user_id": str(user.id)})
+        refresh_token_hash = hash_token(refresh_token_string)
+        expires_at = datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
+        refresh_token = RefreshToken(
+            user_id=user.id,
+            token_hash=refresh_token_hash,
+            device_info={"ip_address": ip_address, "user_agent": user_agent} if ip_address or user_agent else None,
+            expires_at=expires_at,
+        )
+        self.db.add(refresh_token)
+        self.db.commit()
+
+        try:
+            self.audit.log_event(
+                self.db,
+                AuditEventType.LOGIN_SUCCESS,
+                f"Super admin logged in with MFA: {user.email}",
+                actor_user_id=user.id,
+                tenant_id=user.tenant_id,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                event_metadata={"mfa_verified": True},
+            )
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+
+        return access_token, refresh_token_string, user
     
     def refresh_access_token(self, refresh_token_string: str) -> str:
         """Refresh access token using refresh token."""

@@ -66,6 +66,8 @@ class Settings(BaseSettings):
     SUPER_ADMIN_PASSWORD: Optional[str] = None
     SUPER_ADMIN_FIRST_NAME: str = "Super"
     SUPER_ADMIN_LAST_NAME: str = "Admin"
+    # MFA for super_admin login /admin APIs. Keep false for local; set true in prod.
+    REQUIRE_SUPER_ADMIN_MFA: bool = False
 
     # Content Ingestion Configuration
     OCR_ENGINE: str = "tesseract"  # tesseract | easyocr | mathpix

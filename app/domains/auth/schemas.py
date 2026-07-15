@@ -55,6 +55,8 @@ class LoginChallengeResponse(BaseModel):
     login_token: str  # Short-lived token for step 2
     message: Optional[str] = None
     memberships: Optional[List["MembershipResponse"]] = None  # For TENANT_SELECTION_REQUIRED
+    mfa_secret: Optional[str] = None  # For MFA_ENROLL_REQUIRED
+    otpauth_url: Optional[str] = None  # For MFA_ENROLL_REQUIRED
 
 
 class LoginResponse(BaseModel):
@@ -103,6 +105,23 @@ class AdminChangePasswordRequest(BaseModel):
             "new_password": "NewSecurePassword123!@#"
         }
     })
+
+
+class MfaEnrollRequest(BaseModel):
+    """Start MFA enrollment (during login or authenticated)."""
+    login_token: Optional[str] = None
+
+
+class MfaVerifyRequest(BaseModel):
+    """Verify MFA code (during login or authenticated)."""
+    code: str = Field(..., min_length=6, max_length=8)
+    login_token: Optional[str] = None
+
+
+class MfaEnrollResponse(BaseModel):
+    secret: str
+    otpauth_url: str
+    issuer: str = "1ne.ai"
 
 
 # User schemas

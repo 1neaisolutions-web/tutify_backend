@@ -30,6 +30,9 @@ from app.domains.auth.schemas import (
     VerifyEmailRequest,
     ChangePasswordRequest,
     AdminChangePasswordRequest,
+    MfaEnrollRequest,
+    MfaVerifyRequest,
+    MfaEnrollResponse,
     UserResponse,
     UserProfile,
     UserUpdate,
@@ -103,6 +106,93 @@ def _build_preferences_response(raw: Optional[Dict[str, Any]]) -> UserPreference
         timezone=str(prefs.get("timezone") or "UTC"),
     )
 
+
+def _maybe_mfa_challenge(user: User, auth_service: "AuthService", db: Session) -> Optional[LoginResponse]:
+    """Return MFA challenge for super_admin users who need enrollment or verification."""
+    from app.core.config import settings
+    from app.domains.auth.services.mfa_service import MfaService
+
+    if not settings.REQUIRE_SUPER_ADMIN_MFA:
+        return None
+
+    mfa = MfaService(db)
+    if not is_super_admin_user(db, user.id):
+        return None
+
+    login_token = auth_service.create_mfa_login_token(user)
+    if mfa.mfa_enrollment_required(user):
+        secret, otpauth_url, _ = mfa.start_enrollment(user)
+        return LoginResponse(
+            status="CHALLENGE",
+            challenge=LoginChallengeResponse(
+                challenge_type="MFA_ENROLL_REQUIRED",
+                login_token=login_token,
+                message="Set up two-factor authentication to access the admin panel",
+                mfa_secret=secret,
+                otpauth_url=otpauth_url,
+            ),
+        )
+    if mfa.mfa_required_for_user(user):
+        return LoginResponse(
+            status="CHALLENGE",
+            challenge=LoginChallengeResponse(
+                challenge_type="MFA_REQUIRED",
+                login_token=login_token,
+                message="Enter the code from your authenticator app",
+            ),
+        )
+    return None
+
+
+def is_super_admin_user(db: Session, user_id: UUID) -> bool:
+    from app.domains.auth.services.mfa_service import is_super_admin
+    return is_super_admin(db, user_id)
+
+
+def _build_user_response(user: User, db: Session) -> UserResponse:
+    from app.domains.auth.models import UserRole, Role, UserMembership
+    from app.domains.auth.schemas import UserRoleInfo
+
+    roles_data = []
+    try:
+        user_roles = (
+            db.query(UserRole).join(Role).filter(UserRole.user_id == user.id).limit(20).all()
+        )
+        if user_roles:
+            roles_data = [
+                UserRoleInfo(
+                    id=ur.role.id, name=ur.role.name, scope=ur.role.scope,
+                    tenant_id=ur.tenant_id, granted_at=ur.granted_at,
+                )
+                for ur in user_roles
+            ]
+        else:
+            memberships_with_roles = (
+                db.query(UserMembership)
+                .join(Role, UserMembership.role_id == Role.id)
+                .filter(UserMembership.user_id == user.id, UserMembership.is_active == True)
+                .limit(20).all()
+            )
+            seen = set()
+            for membership in memberships_with_roles:
+                if membership.role_id and membership.role_id not in seen:
+                    seen.add(membership.role_id)
+                    roles_data.append(UserRoleInfo(
+                        id=membership.role.id, name=membership.role.name,
+                        scope=membership.role.scope, tenant_id=user.tenant_id,
+                        granted_at=membership.granted_at or user.created_at,
+                    ))
+    except Exception:
+        roles_data = []
+
+    return UserResponse(**{
+        "id": user.id, "email": user.email, "first_name": user.first_name,
+        "last_name": user.last_name, "phone": user.phone, "username": user.username,
+        "tenant_id": user.tenant_id, "status": user.status,
+        "email_verified": user.email_verified,
+        "created_at": user.created_at, "updated_at": user.updated_at,
+        "roles": roles_data or None,
+    })
 
 
 # ========== Public Auth Endpoints ==========
@@ -249,22 +339,12 @@ async def login(
                     pass  # Ignore rollback errors
                 roles_data = []
             
-            user_dict = {
-                "id": user.id,
-                "email": user.email,
-                "first_name": user.first_name,
-                "last_name": user.last_name,
-                "phone": user.phone,
-                "username": user.username,
-                "tenant_id": user.tenant_id,
-                "status": user.status,
-                "email_verified": user.email_verified,
-                "created_at": user.created_at,
-                "updated_at": user.updated_at,
-                "roles": roles_data if roles_data else None,
-            }
-            user_response = UserResponse(**user_dict)
-            
+            user_response = _build_user_response(user, db)
+
+            mfa_challenge = _maybe_mfa_challenge(user, auth_service, db)
+            if mfa_challenge:
+                return mfa_challenge
+
             return LoginResponse(
                 status="SUCCESS",
                 access_token=access_token,
@@ -416,21 +496,11 @@ async def login(
                 pass  # Ignore rollback errors
             roles_data = []  # Continue without roles if query fails
         
-        user_dict = {
-            "id": user.id,
-            "email": user.email,
-            "first_name": user.first_name,
-            "last_name": user.last_name,
-            "phone": user.phone,
-            "username": user.username,
-            "tenant_id": user.tenant_id,
-            "status": user.status,
-            "email_verified": user.email_verified,
-            "created_at": user.created_at,
-            "updated_at": user.updated_at,
-            "roles": roles_data if roles_data else None,
-        }
-        user_response = UserResponse(**user_dict)
+        user_response = _build_user_response(user, db)
+
+        mfa_challenge = _maybe_mfa_challenge(user, auth_service, db)
+        if mfa_challenge:
+            return mfa_challenge
         
         return LoginResponse(
             status="SUCCESS",
@@ -2022,4 +2092,74 @@ async def reject_signup(
     registration_service.reject_signup(user_id, current_user.id, request.reason)
     
     return None
+
+
+# ========== MFA Endpoints ==========
+
+@router.post("/auth/mfa/enroll", response_model=MfaEnrollResponse)
+async def mfa_enroll(
+    body: MfaEnrollRequest,
+    db: Session = Depends(get_db),
+):
+    """Start MFA enrollment for super_admin via login_token."""
+    from app.domains.auth.services.mfa_service import MfaService
+    from app.core.security import decode_token
+
+    if not body.login_token:
+        raise HTTPException(status_code=400, detail="login_token is required")
+
+    try:
+        token_data = decode_token(body.login_token)
+        user = db.query(User).filter(User.id == UUID(token_data["user_id"])).first()
+        if not user:
+            raise HTTPException(status_code=400, detail="Invalid login token")
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid login token")
+
+    mfa = MfaService(db)
+    secret, otpauth_url, _ = mfa.start_enrollment(user)
+    return MfaEnrollResponse(secret=secret, otpauth_url=otpauth_url)
+
+
+@router.post("/auth/mfa/verify", response_model=LoginResponse)
+async def mfa_verify(
+    body: MfaVerifyRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Verify MFA code during login challenge (enrollment or verification)."""
+    if not body.login_token:
+        raise HTTPException(status_code=400, detail="login_token is required")
+
+    auth_service = AuthService(db)
+    ip_address = request.client.host if request.client else None
+    user_agent = request.headers.get("user-agent")
+
+    try:
+        access_token, refresh_token, user = auth_service.complete_mfa_login(
+            login_token=body.login_token,
+            code=body.code,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            enroll=True,
+        )
+    except Exception:
+        try:
+            access_token, refresh_token, user = auth_service.complete_mfa_login(
+                login_token=body.login_token,
+                code=body.code,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                enroll=False,
+            )
+        except Exception as e:
+            raise HTTPException(status_code=400, detail="Invalid MFA code")
+
+    return LoginResponse(
+        status="SUCCESS",
+        access_token=access_token,
+        refresh_token=refresh_token,
+        token_type="bearer",
+        user=_build_user_response(user, db),
+    )
 

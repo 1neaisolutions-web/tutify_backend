@@ -30,11 +30,15 @@ try:
     from app.domains.learning_progress import routes as learning_progress_routes
     from app.domains.recommendation_analytics import routes as recommendation_analytics_routes
     from app.domains.personalization import routes as personalization_routes
+    from app.domains.admin import routes as admin_routes
 
     router = APIRouter()
     
     # Authentication routes
     router.include_router(auth_routes.router)
+
+    # Super Admin platform routes
+    router.include_router(admin_routes.router)
     
     # Metadata (countries, regions, subjects, etc.) and profile context
     router.include_router(metadata_routes.router)
