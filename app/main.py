@@ -66,6 +66,7 @@ else:
         "http://127.0.0.1:3000",
         "http://localhost:5174",  # Vite alternative port
         "http://127.0.0.1:5174",
+        
     ]
     
     # Add Vercel frontend URL if provided via environment variable
@@ -85,12 +86,11 @@ else:
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=cors_origins,
+    allow_origins=["*"],  # For testing. Replace with your S3 domain later.
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 
 # ========== Global Exception Handlers ==========
 
@@ -250,7 +250,6 @@ async def invalid_credentials_error_handler(request: Request, exc: InvalidCreden
         content={"detail": exc.detail},
         headers=exc.headers if hasattr(exc, "headers") else None,
     )
-
 
 @app.exception_handler(UserNotFoundError)
 async def user_not_found_error_handler(request: Request, exc: UserNotFoundError):
@@ -430,6 +429,7 @@ async def general_exception_handler(request: Request, exc: Exception):
 
 @app.get("/health")
 async def health_check():
+    print("My health is 100% ok!")
     """
     Liveness probe — returns immediately (no DB).
     Use GET /health/ready for a database ping (may be slow on cold cloud Postgres).

@@ -101,8 +101,6 @@ def _build_preferences_response(raw: Optional[Dict[str, Any]]) -> UserPreference
         timezone=str(prefs.get("timezone") or "UTC"),
     )
 
-
-
 # ========== Public Auth Endpoints ==========
 
 @router.post("/auth/register", response_model=dict, status_code=status.HTTP_201_CREATED)

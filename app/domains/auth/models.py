@@ -79,7 +79,6 @@ class InstitutionType(str, enum.Enum):
     TRAINING_CENTER = "training_center"
     OTHER = "other"
 
-
 class ScopeType(str, enum.Enum):
     """Scope type for memberships."""
     INSTITUTION = "institution"

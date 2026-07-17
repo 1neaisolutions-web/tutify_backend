@@ -32,11 +32,11 @@ def upgrade() -> None:
     # Step 1: Migrate Tenant records with type=SCHOOL to type=INSTITUTION
     # Note: We keep both SCHOOL and INSTITUTION in enum for backward compatibility
     # Update tenant type from SCHOOL to INSTITUTION
-    connection.execute(sa.text("""
-        UPDATE tenants 
-        SET type = 'institution' 
-        WHERE type = 'school'
-    """))
+    #connection.execute(sa.text("""
+    #   UPDATE tenants 
+    #   SET type = 'institution' 
+    #   WHERE type = 'school'
+    #"""))
     
     # Step 2: Create Institution records from Tenant records with type=INSTITUTION
     connection.execute(sa.text("""
@@ -52,7 +52,7 @@ def upgrade() -> None:
             t.created_at,
             t.updated_at
         FROM tenants t
-        WHERE t.type = 'institution'
+        WHERE t.type = 'school'
         AND NOT EXISTS (
             SELECT 1 FROM institutions i WHERE i.id = t.id
         )
@@ -69,10 +69,9 @@ def upgrade() -> None:
             gen_random_uuid(),  -- New UUID for membership
             ur.user_id,
             CASE 
-                WHEN t.type = 'institution' THEN 'institution'::scopetype
                 WHEN t.type = 'organization' THEN 'organization'::scopetype
                 WHEN t.type = 'platform' THEN 'personal_workspace'::scopetype
-                ELSE 'institution'::scopetype
+                ELSE NULL::scopetype 
             END,
             ur.tenant_id,  -- scope_id = tenant_id
             ur.role_id,
@@ -116,7 +115,7 @@ def upgrade() -> None:
             SELECT 1 FROM user_roles ur
             JOIN tenants t ON ur.tenant_id = t.id
             WHERE ur.user_id = u.id
-            AND t.type IN ('institution', 'organization')
+            AND t.type IN ( 'organization')
         )
     """))
     
@@ -152,11 +151,11 @@ def upgrade() -> None:
     
     # Step 6: Update RoleName enum values in roles table
     # Update SCHOOL_ADMIN to INSTITUTION_ADMIN in roles
-    connection.execute(sa.text("""
-        UPDATE roles
-        SET name = 'institution_admin'::rolename
-        WHERE name = 'school_admin'::rolename
-    """))
+    #connection.execute(sa.text("""
+    #    UPDATE roles
+    #    SET name = 'institution_admin'::rolename
+    #   WHERE name = 'school_admin'::rolename
+    #"""))
     
     # Step 7: Update UserRole records that reference school_admin role
     # This is handled by the role update above, but we need to ensure consistency
@@ -171,11 +170,11 @@ def downgrade() -> None:
     connection = op.get_bind()
     
     # Reverse Step 7: Update roles back
-    connection.execute(sa.text("""
-        UPDATE roles
-        SET name = 'school_admin'::rolename
-        WHERE name = 'institution_admin'::rolename
-    """))
+    #connection.execute(sa.text("""
+    #   UPDATE roles
+    #   SET name = 'school_admin'::rolename
+    #   WHERE name = 'institution_admin'::rolename
+    #   """))
     
     # Reverse Step 5: Delete personal workspace memberships
     connection.execute(sa.text("""

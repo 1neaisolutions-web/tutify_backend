@@ -1,0 +1,50 @@
+# ============================================
+# Tutify Backend - .dockerignore
+# ============================================
+# Yeh files/folders Docker image mein COPY nahi hongi
+
+# Python cache & virtual environments
+__pycache__/
+*.pyc
+*.pyo
+venv/
+env/
+.venv/
+
+# Environment & secrets (kabhi image mein nahi jaani chahiye)
+.env
+.env.*
+!.env.example
+
+# Git
+.git/
+.gitignore
+
+# Local uploads (ephemeral data, image mein nahi chahiye)
+uploads/
+
+# IDE / editor files
+.vscode/
+.idea/
+*.swp
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Test & cache
+.pytest_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+
+# Docs / misc (optional, image size kam karne ke liye)
+README.md
+docs/
+
+# requirements-ml.txt is intentionally NOT excluded here automatically,
+# but since Dockerfile only COPYs requirements.txt explicitly,
+# requirements-ml.txt won't be installed unless you add it yourself.

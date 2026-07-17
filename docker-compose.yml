@@ -1,0 +1,46 @@
+# ============================================
+# Tutify - Docker Compose (Local Learning Setup)
+# ============================================
+# Yeh file backend + database dono containers ko
+# ek saath start karti hai, aapas mein connected.
+#
+# Run karne ka command: docker compose up
+
+services:
+
+  # ---------- Database Service ----------
+  db:
+    image: pgvector/pgvector:pg15   # PostgreSQL 15 + pgvector already built-in
+    container_name: tutify-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: tutify_user
+      POSTGRES_PASSWORD: tutify_pass
+      POSTGRES_DB: tutify_db
+    ports:
+      - "5433:5432"     # Local PC ka 5433 -> Container ka 5432
+                        # (5433 rakha hai taake tumhare PC par agar koi local Postgres
+                        #  already 5432 par chal rahi ho, to clash na ho)
+    volumes:
+      - tutify_pg_data:/var/lib/postgresql/data
+      # Yeh "volume" hai - data ko container delete hone ke baad bhi save rakhta hai
+
+  # ---------- Backend Service ----------
+  backend:
+    build: .            # Current folder ki Dockerfile use karo (jo pehle banayi thi)
+    container_name: tutify-backend
+    restart: unless-stopped
+    depends_on:
+      - db              # db pehle start hogi, phir backend
+    env_file:
+      - .env            # Tumhari saari secrets/config yahan se aayengi
+   #environment:
+      # Yeh DATABASE_URL .env ki value ko OVERRIDE kar dega
+      # taake "localhost" ki jagah service name "db" use ho
+      #DATABASE_URL: postgresql://tutify_user:tutify_pass@db:5432/tutify_db
+    ports:
+      - "8000:8000"
+
+volumes:
+  tutify_pg_data:
+    # Yeh named volume hai - database ka data yahan persist hoga

@@ -56,17 +56,13 @@ def upgrade() -> None:
         create_type=False
     )
     
-    # Add INSTITUTION to TenantType enum
-    op.execute("ALTER TYPE tenanttype ADD VALUE IF NOT EXISTS 'institution'")
-    
-    # Add INSTITUTION_ADMIN to RoleName enum
-    op.execute("ALTER TYPE rolename ADD VALUE IF NOT EXISTS 'institution_admin'")
-    
-    # Add INSTITUTION to RoleScope enum
-    op.execute("ALTER TYPE rolescope ADD VALUE IF NOT EXISTS 'institution'")
-    
-    # Add INVITED to UserStatus enum
-    op.execute("ALTER TYPE userstatus ADD VALUE IF NOT EXISTS 'invited'")
+    # PostgreSQL requires new enum values to be committed before use in later
+    # migrations during a single `alembic upgrade head` run.
+    with op.get_context().autocommit_block():
+        op.execute("ALTER TYPE tenanttype ADD VALUE IF NOT EXISTS 'institution'")
+        op.execute("ALTER TYPE rolename ADD VALUE IF NOT EXISTS 'institution_admin'")
+        op.execute("ALTER TYPE rolescope ADD VALUE IF NOT EXISTS 'institution'")
+        op.execute("ALTER TYPE userstatus ADD VALUE IF NOT EXISTS 'invited'")
     
     # Create institutions table
     op.create_table(
