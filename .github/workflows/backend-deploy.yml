@@ -31,3 +31,7 @@ jobs:
         run: |
           docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+      
+      - name: Force new ECS deployment
+        run: |
+          aws ecs update-service --cluster tutify-cluster --service tutify-backend-service --force-new-deployment

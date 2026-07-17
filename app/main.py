@@ -436,6 +436,15 @@ async def health_check():
     """
     return {"status": "ok", "liveness": True}
 
+@app.get("/health-one")
+async def health_check_one():
+    print("My health is 100% ok!")
+    """
+    Liveness probe — returns immediately (no DB).
+    Use GET /health/ready for a database ping (may be slow on cold cloud Postgres).
+    """
+    return {"status": "ok", "liveness": True}
+
 
 @app.get("/health/ready")
 async def health_ready():
