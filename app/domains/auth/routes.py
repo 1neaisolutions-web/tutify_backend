@@ -645,6 +645,12 @@ async def get_memberships(
     except Exception as e:
         raise
 
+@router.get("/auth/memberships/active")
+async def get_active_membership():
+    try:
+        return {"active_membership_id": "123"}        
+    except Exception as e:
+        raise
 
 @router.post("/auth/memberships/switch", response_model=MembershipSwitchResponse)
 async def switch_membership(
