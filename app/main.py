@@ -426,6 +426,14 @@ async def general_exception_handler(request: Request, exc: Exception):
             },
         )
 
+@app.get("/home")
+async def get_home():
+    print("home")
+    """
+    Liveness probe — returns immediately (no DB).
+    Use GET /health/ready for a database ping (may be slow on cold cloud Postgres).
+    """
+    return {"status": "home"}
 
 @app.get("/health")
 async def health_check():
